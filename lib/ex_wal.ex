@@ -49,11 +49,11 @@ defmodule ExWal do
   ]
 
   defstruct data_path: "",
-            segments: [],
+            hot: %Segment{},
+            cold: :array.new(),
             first_index: 0,
             last_index: 0,
             lru_cache: nil,
-            cold: :array.new(),
             tail_file_handler: nil,
             opts: [
               nosync: false,
@@ -64,7 +64,7 @@ defmodule ExWal do
 
   @type t :: %__MODULE__{
           data_path: String.t(),
-          segments: [Segment.t()],
+          hot: Segment.t(),
           cold: :array.array(),
           first_index: non_neg_integer(),
           last_index: non_neg_integer(),
@@ -130,12 +130,8 @@ defmodule ExWal do
       {:ok,
        %__MODULE__{
          data_path: path,
-         segments: [
-           %Segment{
-             path: seg1,
-             index: 1
-           }
-         ],
+         hot: seg1,
+         cold: :array.new(),
          first_index: 1,
          last_index: 0,
          lru_cache: lru_name,
@@ -153,13 +149,13 @@ defmodule ExWal do
 
       [%Segment{path: path, index: last_index} = seg | t] = segments
       {:ok, h} = File.open(path, [:read, :append])
-
       %Segment{block_count: bc} = seg = load_blocks(seg)
 
       {:ok,
        %__MODULE__{
          data_path: path,
-         segments: [seg | t],
+         hot: seg,
+         cold: :array.from_list(t),
          first_index: first_index,
          last_index: last_index + bc,
          lru_cache: lru_name,
@@ -187,7 +183,7 @@ defmodule ExWal do
         _from,
         %__MODULE__{
           last_index: last_index,
-          segments: [%Segment{buf: buf0} | _],
+          hot: %Segment{buf: buf0},
           opts: opts
         } = state
       ) do
@@ -198,7 +194,7 @@ defmodule ExWal do
     |> is_nil() || raise ArgumentError, "invalid index"
 
     %__MODULE__{
-      segments: [%Segment{path: path0, buf: buf0} | _],
+      hot: %Segment{path: path0, buf: buf0},
       opts: opts
     } =
       state =
@@ -211,7 +207,7 @@ defmodule ExWal do
     since_mark = byte_size(buf0)
 
     %__MODULE__{
-      segments: [%Segment{path: path, buf: buf} | _],
+      hot: %Segment{path: path, buf: buf},
       tail_file_handler: h
     } = state = write_entries(entries, state)
 
@@ -343,13 +339,13 @@ defmodule ExWal do
   defp write_entries(
          [%Entry{index: index} = entry | t],
          %__MODULE__{
-           segments: [seg | st],
+           hot: seg,
            opts: opts
          } = m
        ) do
     %Segment{buf: buf} = seg = append_entry(seg, entry)
 
-    m = %__MODULE__{m | segments: [seg | st], last_index: index}
+    m = %__MODULE__{m | hot: seg, last_index: index}
 
     if byte_size(buf) < opts[:segment_size] do
       write_entries(t, m)
@@ -367,7 +363,8 @@ defmodule ExWal do
            tail_file_handler: h,
            lru_cache: lru,
            last_index: last_index,
-           segments: [seg | st],
+           hot: seg,
+           cold: cold,
            opts: opts
          } = m
        ) do
@@ -383,10 +380,13 @@ defmodule ExWal do
     {:ok, h} = File.open(new_seg.path, [:read, :append])
     :ok = File.chmod!(new_seg.path, opts[:file_permission])
 
+    size = :array.size(cold)
+
     %__MODULE__{
       m
       | tail_file_handler: h,
-        segments: [new_seg, %Segment{seg | blocks: [], block_count: 0, buf: ""} | st],
+        hot: new_seg,
+        cold: :array.set(size, %Segment{seg | blocks: [], block_count: 0, buf: ""}, cold),
         last_index: last_index + 1
     }
   end
