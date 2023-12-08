@@ -126,11 +126,12 @@ defmodule ExWal.LRU do
   """
   @spec select(atom(), (any() -> boolean()), non_neg_integer()) :: any()
   def select(name, match_fun, timeout \\ 5000) do
-    :ets.first(name)
+    name
+    |> :ets.first()
     |> select(name, match_fun, timeout)
   end
 
-  defp select(:end_of_table, _, _, _), do: nil
+  defp select(:"$end_of_table", _, _, _), do: nil
 
   defp select(key, name, match_fun, timeout) do
     [{_, _, value}] = :ets.lookup(name, key)

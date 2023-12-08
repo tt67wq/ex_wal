@@ -166,7 +166,6 @@ defmodule ExWal do
       %Segment{block_count: bc} =
         seg =
         load_segment(seg)
-        |> ExWal.Debug.stacktrace()
 
       {:ok,
        %__MODULE__{
@@ -254,8 +253,19 @@ defmodule ExWal do
 
     %Block{begin: begin, size: size} = :array.get(index - begin_index, blocks)
 
+    # ExWal.Debug.stacktrace(%{
+    #   target_index: index,
+    #   begin_index: begin_index,
+    #   block_begin: begin,
+    #   block_size: size,
+    #   buf_size: byte_size(buf),
+    #   path: path
+    # })
+
     data = binary_part(buf, begin, size)
-    {_, _, data} = Uvarint.decode(data)
+    {data_size, _, data} = Uvarint.decode(data)
+    # ExWal.Debug.debug(data)
+    byte_size(data) == data_size || raise ArgumentError, "invalid data"
 
     {:reply, {:ok, data}, state}
   end
@@ -263,13 +273,13 @@ defmodule ExWal do
   @spec load_segment(Segment.t()) :: Segment.t()
   defp load_segment(
          %Segment{
-           index: begin_index,
+           #  index: begin_index,
            path: path
          } = seg
        ) do
     {:ok, content} = File.read(path)
 
-    {bc, blocks} = parse_blocks(content, begin_index, 0, [])
+    {bc, blocks} = parse_blocks(content, 0, 0, [])
     %Segment{seg | buf: content, blocks: :array.from_list(blocks), block_count: bc}
   end
 
@@ -327,15 +337,14 @@ defmodule ExWal do
       raise ArgumentError,
             "invalid index, begin_index: #{begin_index}, bc: #{bc}, index: #{index}"
 
-    since = byte_size(buf)
     data = Uvarint.encode(byte_size(data)) <> data
 
     {data,
      %Segment{
        seg
-       | buf: <<data::binary, buf::binary>>,
+       | buf: <<buf::binary, data::binary>>,
          block_count: bc + 1,
-         blocks: :array.set(bc, %Block{begin: since, size: byte_size(data)}, blocks)
+         blocks: :array.set(bc, %Block{begin: byte_size(buf), size: byte_size(data)}, blocks)
      }}
   end
 
@@ -408,7 +417,7 @@ defmodule ExWal do
   @spec find_segment(atom(), index(), :array.array()) :: Segment.t()
   defp find_segment(lru, index, cold) do
     LRU.select(lru, fn %Segment{index: x, block_count: bc} ->
-      x >= index and x + bc > index
+      index >= x and index < x + bc
     end)
     |> case do
       nil ->
