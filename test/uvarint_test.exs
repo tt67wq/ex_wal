@@ -24,20 +24,47 @@ defmodule UvarintTest do
 
   describe "decode/1" do
     test "decodes number less than 128" do
-      assert Uvarint.decode(<<42::size(8)>>) == {42, ""}
+      assert Uvarint.decode(<<42::size(8)>>) == {42, 1, ""}
     end
 
     test "decodes number greater than or equal to 128" do
-      assert Uvarint.decode(<<0x8E, 0x02>>) == {270, ""}
-      assert Uvarint.decode(<<0x8E, 0x02>> <> "Hello World") == {270, "Hello World"}
+      assert Uvarint.decode(<<0x8E, 0x02>>) == {270, 2, ""}
+      assert Uvarint.decode(<<0x8E, 0x02>> <> "Hello World") == {270, 2, "Hello World"}
     end
   end
 
   describe "mix" do
     test "encode and decode" do
-      for num <- [0, 1, 127, 128, 270, 1024, 38_913_798] do
-        assert Uvarint.decode(Uvarint.encode(num)) == {num, ""}
-      end
+      strings = ["apple", "banana", "cherry", "date"]
+
+      data =
+        strings
+        |> Enum.reduce("", fn x, acc ->
+          y = Uvarint.encode(byte_size(x)) <> x
+          acc <> y
+        end)
+
+      {size, _, rest} = Uvarint.decode(data)
+      assert size == 5
+      <<h::bytes-size(size), rest::binary>> = rest
+      assert h == "apple"
+
+      {size, _, rest} = Uvarint.decode(rest)
+      assert size == 6
+      <<h::bytes-size(size), rest::binary>> = rest
+      assert h == "banana"
+
+      {size, _, rest} = Uvarint.decode(rest)
+      assert size == 6
+      <<h::bytes-size(size), rest::binary>> = rest
+      assert h == "cherry"
+
+      {size, _, rest} = Uvarint.decode(rest)
+      assert size == 4
+      <<h::bytes-size(size), rest::binary>> = rest
+      assert h == "date"
+
+      assert rest == ""
     end
   end
 end

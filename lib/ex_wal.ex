@@ -98,6 +98,16 @@ defmodule ExWal do
     GenServer.call(name_or_pid, {:write, entries})
   end
 
+  @spec read(atom() | pid(), index()) :: {:ok, binary()} | {:error, :index_not_found}
+  def read(name_or_pid, index) do
+    GenServer.call(name_or_pid, {:read, index})
+  end
+
+  @spec last_index(atom() | pid()) :: index()
+  def last_index(name_or_pid) do
+    GenServer.call(name_or_pid, :last_index)
+  end
+
   # ----------------- Server  -----------------
 
   @impl GenServer
@@ -110,10 +120,13 @@ defmodule ExWal do
     File.chmod!(path, opts[:dir_permission])
 
     segments =
-      (path <> "./*")
+      path
+      |> Path.join("*")
       |> Path.wildcard()
+      |> Enum.reject(fn x -> File.dir?(x) end)
       |> Enum.map(&Path.basename(&1))
-      |> Enum.reject(fn x -> File.dir?(x) or String.length(x) < 20 end)
+      |> Enum.sort(:desc)
+      |> Enum.reject(&(String.length(&1) < 20))
       |> Enum.map(fn x ->
         %Segment{
           path: Path.join(path, x),
@@ -130,7 +143,7 @@ defmodule ExWal do
       {:ok,
        %__MODULE__{
          data_path: path,
-         hot: seg1,
+         hot: %Segment{path: seg1, index: 1},
          cold: :array.new(),
          first_index: 1,
          last_index: 0,
@@ -147,9 +160,13 @@ defmodule ExWal do
       # NOTE: segment is in reverse order
       first_index = List.last(segments).index
 
-      [%Segment{path: path, index: last_index} = seg | t] = segments
-      {:ok, h} = File.open(path, [:read, :append])
-      %Segment{block_count: bc} = seg = load_blocks(seg)
+      [%Segment{path: spath, index: begin_index} = seg | t] = segments
+      {:ok, h} = File.open(spath, [:read, :append])
+
+      %Segment{block_count: bc} =
+        seg =
+        load_segment(seg)
+        |> ExWal.Debug.stacktrace()
 
       {:ok,
        %__MODULE__{
@@ -157,7 +174,7 @@ defmodule ExWal do
          hot: seg,
          cold: :array.from_list(t),
          first_index: first_index,
-         last_index: last_index + bc,
+         last_index: begin_index + bc - 1,
          lru_cache: lru_name,
          tail_file_handler: h,
          opts: [
@@ -178,6 +195,9 @@ defmodule ExWal do
   end
 
   @impl GenServer
+  def handle_call(:last_index, _, %__MODULE__{last_index: last_index} = state),
+    do: {:reply, last_index, state}
+
   def handle_call(
         {:write, entries},
         _from,
@@ -189,48 +209,19 @@ defmodule ExWal do
       ) do
     # check
     entries
-    |> Enum.with_index(1)
-    |> Enum.find(fn {%Entry{index: index}, i} -> index != last_index + i end)
+    |> Enum.with_index(last_index + 1)
+    |> Enum.find(fn {%Entry{index: index}, i} -> index != i end)
     |> is_nil() || raise ArgumentError, "invalid index"
 
-    %__MODULE__{
-      hot: %Segment{path: path0, buf: buf0},
-      opts: opts
-    } =
-      state =
+    # cycle if needed
+    state =
       if byte_size(buf0) > opts[:segment_size] do
         cycle(state)
       else
         state
       end
 
-    since_mark = byte_size(buf0)
-
-    %__MODULE__{
-      hot: %Segment{path: path, buf: buf},
-      tail_file_handler: h
-    } = state = write_entries(entries, state)
-
-    to_persist =
-      if path != path0 do
-        # new segment
-        # all buff in seg1 need to write to disk
-        buf
-      else
-        # same segment
-        binary_part(buf, since_mark, byte_size(buf) - since_mark)
-      end
-
-    # write to disk and sync
-    if byte_size(to_persist) > 0 do
-      :ok = :file.write(h, to_persist)
-
-      unless opts[:nosync] do
-        :ok = :file.sync(h)
-      end
-    end
-
-    {:reply, :ok, state}
+    {:reply, :ok, write_entries(entries, state)}
   end
 
   def handle_call(
@@ -242,40 +233,44 @@ defmodule ExWal do
         } = state
       )
       when index < first_index or index > last_index do
-    {:reply, {:error, :invalid_index}, state}
+    {:reply, {:error, :index_not_found}, state}
   end
 
-  # def handle_call(
-  #       {:read, index},
-  #       _from,
-  #       %__MODULE__{
-  #         lru_cache: lru,
-  #         segments: [%Segment{index: last_begin_index} = seg | _]
-  #       } = state
-  #     ) do
-  #   seg =
-  #     if index >= last_begin_index do
-  #       seg
-  #     else
-  #       LRU.select(lru, fn %Segment{index: x, block_count: bc} ->
-  #         x >= index and x + bc > index
-  #       end)
-  #       |> case do
-  #         nil -> nil
-  #         seg -> seg
-  #       end
-  #     end
-  # end
+  def handle_call(
+        {:read, index},
+        _from,
+        %__MODULE__{
+          lru_cache: lru,
+          hot: %Segment{index: last_begin_index} = seg,
+          cold: cold
+        } = state
+      ) do
+    %Segment{index: begin_index, blocks: blocks, buf: buf} =
+      if index >= last_begin_index do
+        seg
+      else
+        find_segment(lru, index, cold)
+      end
 
-  defp load_blocks(
+    %Block{begin: begin, size: size} = :array.get(index - begin_index, blocks)
+
+    data = binary_part(buf, begin, size)
+    {_, _, data} = Uvarint.decode(data)
+
+    {:reply, {:ok, data}, state}
+  end
+
+  @spec load_segment(Segment.t()) :: Segment.t()
+  defp load_segment(
          %Segment{
+           index: begin_index,
            path: path
          } = seg
        ) do
     {:ok, content} = File.read(path)
 
-    {bc, blocks} = parse_blocks(content, 0, 0, [])
-    %Segment{seg | buf: content, blocks: blocks, block_count: bc}
+    {bc, blocks} = parse_blocks(content, begin_index, 0, [])
+    %Segment{seg | buf: content, blocks: :array.from_list(blocks), block_count: bc}
   end
 
   @spec parse_segment_filename(String.t()) :: index()
@@ -292,23 +287,30 @@ defmodule ExWal do
     |> String.pad_leading(20, "0")
   end
 
-  @spec parse_blocks(binary(), non_neg_integer(), non_neg_integer(), [Block.t()]) ::
+  @spec parse_blocks(
+          data :: binary(),
+          since :: non_neg_integer(),
+          block_count :: non_neg_integer(),
+          blocks :: [Block.t()]
+        ) ::
           {non_neg_integer(), [Block.t()]}
-  defp parse_blocks("", _, bc, blocks), do: {bc, blocks}
+  defp parse_blocks("", _, bc, blocks), do: {bc, Enum.reverse(blocks)}
 
   defp parse_blocks(data, since, bc, acc) do
     {size, bytes_read, data} = Uvarint.decode(data)
+
     # check
     size == 0 && raise ArgumentError, "invalid block size"
-    byte_size(data) != size && raise ArgumentError, "invalid block size"
 
     next = since + size + bytes_read
+    <<_::bytes-size(size), rest::binary>> = data
 
-    parse_blocks(data, next, bc + 1, [
-      %Block{begin_post: since, end_post: next} | acc
+    parse_blocks(rest, next, bc + 1, [
+      %Block{begin: since, size: size + bytes_read} | acc
     ])
   end
 
+  @spec append_entry(Segment.t(), Entry.t()) :: {binary(), Segment.t()}
   defp append_entry(
          %Segment{
            buf: buf,
@@ -321,31 +323,43 @@ defmodule ExWal do
            data: data
          }
        ) do
-    index == begin_index + bc + 1 || raise ArgumentError, "invalid index"
+    index == begin_index + bc ||
+      raise ArgumentError,
+            "invalid index, begin_index: #{begin_index}, bc: #{bc}, index: #{index}"
+
     since = byte_size(buf)
     data = Uvarint.encode(byte_size(data)) <> data
 
-    %Segment{
-      seg
-      | buf: <<data::binary, buf::binary>>,
-        block_count: bc + 1,
-        blocks: [%Block{begin_post: since, end_post: since + byte_size(data)} | blocks]
-    }
+    {data,
+     %Segment{
+       seg
+       | buf: <<data::binary, buf::binary>>,
+         block_count: bc + 1,
+         blocks: :array.set(bc, %Block{begin: since, size: byte_size(data)}, blocks)
+     }}
   end
 
   @spec write_entries([Entry.t()], t()) :: t()
   defp write_entries([], m), do: m
 
   defp write_entries(
-         [%Entry{index: index} = entry | t],
+         [entry | t],
          %__MODULE__{
            hot: seg,
-           opts: opts
+           opts: opts,
+           tail_file_handler: h
          } = m
        ) do
-    %Segment{buf: buf} = seg = append_entry(seg, entry)
+    {data, %Segment{buf: buf, index: begin_index, block_count: bc} = seg} =
+      append_entry(seg, entry)
 
-    m = %__MODULE__{m | hot: seg, last_index: index}
+    :ok = :file.write(h, data)
+
+    if opts[:nosync] do
+      :ok = :file.sync(h)
+    end
+
+    m = %__MODULE__{m | hot: seg, last_index: begin_index + bc - 1}
 
     if byte_size(buf) < opts[:segment_size] do
       write_entries(t, m)
@@ -386,8 +400,46 @@ defmodule ExWal do
       m
       | tail_file_handler: h,
         hot: new_seg,
-        cold: :array.set(size, %Segment{seg | blocks: [], block_count: 0, buf: ""}, cold),
-        last_index: last_index + 1
+        cold: :array.set(size, %Segment{seg | blocks: nil, buf: ""}, cold),
+        last_index: last_index
     }
+  end
+
+  @spec find_segment(atom(), index(), :array.array()) :: Segment.t()
+  defp find_segment(lru, index, cold) do
+    LRU.select(lru, fn %Segment{index: x, block_count: bc} ->
+      x >= index and x + bc > index
+    end)
+    |> case do
+      nil ->
+        cold
+        |> bin_search(index)
+        |> load_segment()
+        |> tap(fn x -> LRU.put(lru, make_ref(), x) end)
+
+      seg ->
+        seg
+    end
+  end
+
+  @spec bin_search(:array.array(), index()) :: Segment.t() | nil
+  defp bin_search(cold, target_index), do: do_search(cold, target_index, 0, :array.size(cold) - 1)
+
+  defp do_search(_cold, _target_index, min, max) when min > max, do: nil
+
+  defp do_search(cold, target_index, min, max) do
+    mid = div(min + max, 2)
+    %Segment{index: index, block_count: bc} = seg = :array.get(mid, cold)
+
+    cond do
+      target_index < index ->
+        do_search(cold, target_index, min, mid - 1)
+
+      target_index >= index and target_index < index + bc ->
+        seg
+
+      true ->
+        do_search(cold, target_index, mid + 1, max)
+    end
   end
 end

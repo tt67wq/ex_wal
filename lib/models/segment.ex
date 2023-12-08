@@ -3,7 +3,7 @@ defmodule ExWal.Models.Segment do
   a single segment file
   """
 
-  defstruct path: "", index: 0, buf: "", block_count: 0, blocks: []
+  defstruct path: "", index: 1, buf: "", block_count: 0, blocks: :array.new()
 
   @type t :: %__MODULE__{
           path: String.t(),
@@ -11,21 +11,19 @@ defmodule ExWal.Models.Segment do
           index: non_neg_integer(),
           buf: binary(),
           block_count: non_neg_integer(),
-          # blocks in the segment, in reverse order, first block is the last block in the segment
-          blocks: [ExWal.Models.Block.t()]
+          blocks: :array.array(ExWal.Models.Block.t()) | nil
         }
 end
 
 defmodule ExWal.Models.Block do
   @moduledoc """
   a single block in a segment file
-  format:
   """
 
-  defstruct begin_post: 0, end_post: 0
+  defstruct begin: 0, size: 0
 
   @type t :: %__MODULE__{
-          begin_post: non_neg_integer(),
-          end_post: non_neg_integer()
+          begin: non_neg_integer(),
+          size: non_neg_integer()
         }
 end
