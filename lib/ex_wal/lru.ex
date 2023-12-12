@@ -68,8 +68,7 @@ defmodule ExWal.LRU do
   `value` is replaced by the new one. This updates the order of LRU cache.
   """
   @spec put(atom(), any(), any(), non_neg_integer()) :: :ok
-  def put(name, key, value, timeout \\ 5000),
-    do: Agent.get(name, __MODULE__, :handle_put, [key, value], timeout)
+  def put(name, key, value, timeout \\ 5000), do: Agent.get(name, __MODULE__, :handle_put, [key, value], timeout)
 
   @doc """
   Updates a `value` in `cache`. If `key` is not present in `cache` then nothing is done.
@@ -149,8 +148,13 @@ defmodule ExWal.LRU do
   Removes the entry stored under the given `key` from cache.
   """
   @spec delete(atom(), any(), non_neg_integer()) :: :ok
-  def delete(name, key, timeout \\ 5000),
-    do: Agent.get(name, __MODULE__, :handle_delete, [key], timeout)
+  def delete(name, key, timeout \\ 5000), do: Agent.get(name, __MODULE__, :handle_delete, [key], timeout)
+
+  @doc """
+  Removes all entries from cache.
+  """
+  @spec clear(atom(), non_neg_integer()) :: :ok
+  def clear(name, timeout \\ 5000), do: Agent.get(name, __MODULE__, :handle_clear, [], timeout)
 
   @doc false
   @spec init(atom(), non_neg_integer(), Keyword.t()) :: t()
@@ -183,6 +187,12 @@ defmodule ExWal.LRU do
   def handle_delete(%{table: table} = state, key) do
     delete_ttl(state, key)
     :ets.delete(table, key)
+    :ok
+  end
+
+  def handle_clear(%__MODULE__{table: table, ttl_table: ttl_table}) do
+    :ets.delete_all_objects(table)
+    :ets.delete_all_objects(ttl_table)
     :ok
   end
 
