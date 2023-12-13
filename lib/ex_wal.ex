@@ -145,31 +145,97 @@ defmodule ExWal do
     GenServer.call(name_or_pid, {:read, index}, timeout)
   end
 
+  @doc """
+  Get the last index of WAL
+  """
   @spec last_index(atom() | pid()) :: index()
   def last_index(name_or_pid) do
     GenServer.call(name_or_pid, :last_index)
   end
 
+  @doc """
+  Get the first index of WAL
+  """
   @spec first_index(atom() | pid()) :: index()
   def first_index(name_or_pid) do
     GenServer.call(name_or_pid, :first_index)
   end
 
+  @doc """
+  Get the segment count of WAL
+  """
   @spec segment_count(atom() | pid()) :: non_neg_integer()
   def segment_count(name_or_pid) do
     GenServer.call(name_or_pid, :segment_count)
   end
 
-  @spec truncate_after(atom() | pid(), index()) :: :ok | {:error, :index_out_of_range}
-  def truncate_after(name_or_pid, index) do
-    GenServer.call(name_or_pid, {:truncate_after, index})
+  @doc """
+  Truncates the write-ahead log (WAL) after a specific index.
+
+  ## Examples
+
+      iex> MyApp.WAL.truncate_after(:my_wal, 10)
+      :ok
+
+  ## Parameters
+
+    * `name_or_pid` - The name or process identifier of the WAL GenServer.
+    * `index` - The index after which to truncate the WAL.
+    * `timeout` (optional) - The timeout value in milliseconds (default: 5000).
+
+  ## Returns
+
+  - `:ok` - If the truncation is successful.
+  - `{:error, :index_out_of_range}` - If the provided index is out of range.
+
+  """
+  @spec truncate_after(atom() | pid(), index(), non_neg_integer()) :: :ok | {:error, :index_out_of_range}
+  def truncate_after(name_or_pid, index, timeout \\ 5000) do
+    GenServer.call(name_or_pid, {:truncate_after, index}, timeout)
   end
 
-  @spec truncate_before(atom() | pid(), index()) :: :ok | {:error, :index_out_of_range}
-  def truncate_before(name_or_pid, index) do
-    GenServer.call(name_or_pid, {:truncate_before, index})
+  @doc """
+  Truncates the write-ahead log (WAL) before a specific index.
+
+  ## Examples
+
+      iex> MyApp.WAL.truncate_before(:my_wal, 10)
+      :ok
+
+  ## Parameters
+
+    * `name_or_pid` - The name or process identifier of the WAL GenServer.
+    * `index` - The index before which to truncate the WAL.
+    * `timeout` (optional) - The timeout value in milliseconds (default: 5000).
+
+  ## Returns
+
+  - `:ok` - If the truncation is successful.
+  - `{:error, :index_out_of_range}` - If the provided index is out of range.
+
+  """
+  @spec truncate_before(atom() | pid(), index(), non_neg_integer()) :: :ok | {:error, :index_out_of_range}
+  def truncate_before(name_or_pid, index, timeout \\ 5000) do
+    GenServer.call(name_or_pid, {:truncate_before, index}, timeout)
   end
 
+  @doc """
+  Clears the write-ahead log (WAL) by removing all entries.
+
+  ## Examples
+
+      iex> MyApp.WAL.clear(:my_wal)
+      :ok
+
+  ## Parameters
+
+    * `name_or_pid` - The name or process identifier of the WAL GenServer.
+
+  ## Returns
+
+  - `:ok` - If the clearing is successful.
+
+  """
   @spec clear(atom() | pid()) :: :ok
   def clear(name_or_pid) do
     GenServer.cast(name_or_pid, :clear)
