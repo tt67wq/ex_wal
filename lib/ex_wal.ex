@@ -122,6 +122,16 @@ defmodule ExWal do
     GenServer.call(name_or_pid, :last_index)
   end
 
+  @spec first_index(atom() | pid()) :: index()
+  def first_index(name_or_pid) do
+    GenServer.call(name_or_pid, :first_index)
+  end
+
+  @spec segment_count(atom() | pid()) :: non_neg_integer()
+  def segment_count(name_or_pid) do
+    GenServer.call(name_or_pid, :segment_count)
+  end
+
   @spec truncate_after(atom() | pid(), index()) :: :ok | {:error, :index_out_of_range}
   def truncate_after(name_or_pid, index) do
     GenServer.call(name_or_pid, {:truncate_after, index})
@@ -130,6 +140,11 @@ defmodule ExWal do
   @spec truncate_before(atom() | pid(), index()) :: :ok | {:error, :index_out_of_range}
   def truncate_before(name_or_pid, index) do
     GenServer.call(name_or_pid, {:truncate_before, index})
+  end
+
+  @spec clear(atom() | pid()) :: :ok
+  def clear(name_or_pid) do
+    GenServer.cast(name_or_pid, :clear)
   end
 
   # ----------------- Server  -----------------
@@ -188,7 +203,7 @@ defmodule ExWal do
          ]
        }}
     else
-      # NOTE: segment is in reverse order
+      # segment is in reverse order
       first_index = List.last(segments).index
 
       [%Segment{path: spath} = seg | t] = segments
@@ -232,6 +247,12 @@ defmodule ExWal do
   @impl GenServer
   def handle_call(:last_index, _, %__MODULE__{last_index: last_index} = state), do: {:reply, last_index, state}
 
+  def handle_call(:first_index, _, %__MODULE__{first_index: first_index} = state), do: {:reply, first_index, state}
+
+  def handle_call(:segment_count, _, %__MODULE__{cold: cold} = state) do
+    {:reply, :array.size(cold) + 1, state}
+  end
+
   def handle_call(
         {:write, entries},
         _from,
@@ -262,18 +283,17 @@ defmodule ExWal do
   def handle_call({:read, index}, _from, %__MODULE__{} = state) do
     %Segment{index: begin_index, blocks: blocks, buf: buf} = find_segment(index, state)
 
-    %Block{begin: begin, size: size} = :array.get(index - begin_index, blocks)
+    %Block{offset: offset, size: size} = :array.get(index - begin_index, blocks)
 
     # ExWal.Debug.stacktrace(%{
     #   target_index: index,
     #   begin_index: begin_index,
-    #   block_begin: begin,
+    #   block_offset: offset,
     #   block_size: size,
-    #   buf_size: byte_size(buf),
-    #   path: path
+    #   buf_size: byte_size(buf)
     # })
 
-    data = binary_part(buf, begin, size)
+    data = binary_part(buf, offset, size)
     {data_size, _, data} = Uvarint.decode(data)
     # ExWal.Debug.debug(data)
     byte_size(data) == data_size || raise ArgumentError, "invalid data"
@@ -287,6 +307,9 @@ defmodule ExWal do
       when index < first_index or index > last_index do
     {:reply, {:error, :index_out_of_range}, state}
   end
+
+  def handle_call({:truncate_after, index}, _from, %__MODULE__{last_index: last_index} = state) when index == last_index,
+    do: {:reply, :ok, state}
 
   def handle_call({:truncate_after, index}, _from, state) do
     {:reply, :ok, __truncate_after(index, state)}
@@ -309,6 +332,58 @@ defmodule ExWal do
   def handle_call({:truncate_before, index}, _from, state) do
     {:reply, :ok, __truncate_before(index, state)}
   end
+
+  @impl GenServer
+  def handle_cast(
+        :clear,
+        %__MODULE__{
+          data_path: data_path,
+          lru_cache: lru,
+          hot: %Segment{path: path},
+          store: store,
+          tail_store_handler: h,
+          cold: cold,
+          opts: opts
+        } = state
+      ) do
+    # rm cache
+    LRU.clear(lru)
+
+    # rm hot
+    :ok = Store.close(store, h)
+    :ok = Store.rm(store, path)
+
+    # rm cold
+    if :array.size(cold) > 0 do
+      Enum.each(0..(:array.size(cold) - 1), fn i ->
+        %Segment{path: path} = :array.get(i, cold)
+        :ok = Store.rm(store, path)
+      end)
+    end
+
+    # reinit
+    seg1_path = Path.join(data_path, segment_filename(1))
+
+    {:ok, h} =
+      Store.open(
+        store,
+        seg1_path,
+        [:read, :append],
+        opts[:file_permission]
+      )
+
+    {:noreply,
+     %__MODULE__{
+       state
+       | hot: %Segment{path: seg1_path, index: 1},
+         cold: :array.new(),
+         first_index: 1,
+         last_index: 0,
+         tail_store_handler: h
+     }}
+  end
+
+  # ----------------- Private -----------------
 
   @spec load_segment(Segment.t(), Store.t()) :: Segment.t()
   #  index: begin_index,
@@ -339,7 +414,7 @@ defmodule ExWal do
           block_count :: non_neg_integer(),
           blocks :: [Block.t()]
         ) ::
-          {non_neg_integer(), [Block.t()]}
+          {block_count :: non_neg_integer(), blocks :: [Block.t()]}
   defp parse_blocks("", _, bc, blocks), do: {bc, Enum.reverse(blocks)}
 
   defp parse_blocks(data, since, bc, acc) do
@@ -352,7 +427,7 @@ defmodule ExWal do
     <<_::bytes-size(size), rest::binary>> = data
 
     parse_blocks(rest, next, bc + 1, [
-      %Block{begin: since, size: size + bytes_read} | acc
+      %Block{offset: since, size: size + bytes_read} | acc
     ])
   end
 
@@ -372,7 +447,7 @@ defmodule ExWal do
        seg
        | buf: <<buf::binary, data::binary>>,
          block_count: bc + 1,
-         blocks: :array.set(bc, %Block{begin: byte_size(buf), size: byte_size(data)}, blocks)
+         blocks: :array.set(bc, %Block{offset: byte_size(buf), size: byte_size(data)}, blocks)
      }}
   end
 
@@ -468,13 +543,21 @@ defmodule ExWal do
 
   defp do_search(_cold, _target_index, min, max) when min > max, do: nil
 
+  defp do_search(cold, target_index, min, max) when min == max do
+    %Segment{index: index, block_count: bc} = :array.get(min, cold)
+
+    if target_index >= index and target_index < index + bc do
+      min
+    end
+  end
+
   defp do_search(cold, target_index, min, max) do
     mid = div(min + max, 2)
     %Segment{index: index, block_count: bc} = :array.get(mid, cold)
 
     cond do
       target_index < index ->
-        do_search(cold, target_index, min, mid - 1)
+        do_search(cold, target_index, min, mid)
 
       target_index >= index and target_index < index + bc ->
         mid
@@ -496,9 +579,23 @@ defmodule ExWal do
        )
        when index >= begin_index do
     # truncate buf and blocks
-    bc = index - begin_index
-    %Block{begin: offset} = :array.get(bc + 1, blocks)
-    buf = binary_part(buf, 0, offset - 1)
+    truncate_idx = index - begin_index + 1
+
+    new_seg =
+      if truncate_idx < :array.size(blocks) do
+        %Block{offset: offset} = :array.get(truncate_idx, blocks)
+        buf = binary_part(buf, 0, offset)
+        blocks = :array.resize(truncate_idx, blocks)
+
+        %Segment{
+          seg
+          | buf: buf,
+            block_count: truncate_idx - 1,
+            blocks: blocks
+        }
+      else
+        seg
+      end
 
     # truncate file
     temp_file = Path.join(data_path, "tmp")
@@ -514,21 +611,24 @@ defmodule ExWal do
     # no need to gc blocks, reset block_count is all we need
     %__MODULE__{
       state
-      | hot: %Segment{
-          seg
-          | buf: buf,
-            block_count: bc
-        },
+      | hot: new_seg,
+        last_index: index,
         tail_store_handler: h
     }
   end
 
   defp __truncate_after(
          index,
-         %__MODULE__{cold: cold, store: store, data_path: data_path, tail_store_handler: h, lru_cache: lru} = state
+         %__MODULE__{
+           cold: cold,
+           store: store,
+           data_path: data_path,
+           tail_store_handler: h,
+           lru_cache: lru,
+           hot: %Segment{path: hot_path}
+         } = state
        ) do
     # find segment by index
-
     idx = bin_search(cold, index)
 
     %Segment{buf: buf, blocks: blocks, index: begin_index, path: path} =
@@ -538,34 +638,44 @@ defmodule ExWal do
       |> load_segment(store)
 
     # truncate buf and blocks
-    bc = index - begin_index
-    %Block{begin: offset} = :array.get(bc + 1, blocks)
-    buf = binary_part(buf, 0, offset - 1)
-    # no need to gc blocks, reset block_count is all we need
-    new_seg = %Segment{
-      seg
-      | buf: buf,
-        block_count: bc
-    }
+    truncate_idx = index - begin_index + 1
+
+    new_seg =
+      if truncate_idx < :array.size(blocks) do
+        %Block{offset: offset} = :array.get(truncate_idx, blocks)
+        buf = binary_part(buf, 0, offset)
+        blocks = :array.resize(truncate_idx, blocks)
+
+        %Segment{
+          seg
+          | buf: buf,
+            block_count: truncate_idx - 1,
+            blocks: blocks
+        }
+      else
+        seg
+      end
 
     # create tmp file to store new buf
     temp_file = Path.join(data_path, "tmp")
     :ok = Store.write_all(store, temp_file, buf)
 
     # swap the tmp file with the old segment file
-    :ok = Store.close(store, h)
     :ok = Store.rename(store, temp_file, path)
 
     # cleanup
     # all segments and cache after the new segment should be deleted
     :ok = LRU.clear(lru)
 
-    Enum.each((idx + 1)..(:array.size(cold) - 1), fn i ->
-      %Segment{path: path} = :array.get(i, cold)
-      Store.rm(store, path)
-    end)
+    if idx + 1 < :array.size(cold) do
+      Enum.each((idx + 1)..(:array.size(cold) - 1), fn i ->
+        %Segment{path: path} = :array.get(i, cold)
+        :ok = Store.rm(store, path)
+      end)
+    end
 
-    cold = :array.resize(idx + 1, cold)
+    :ok = Store.close(store, h)
+    :ok = Store.rm(store, hot_path)
 
     # reopen tail handler
     {:ok, h} = Store.open(store, path, [:read, :append], state.opts[:file_permission])
@@ -573,7 +683,7 @@ defmodule ExWal do
     %__MODULE__{
       state
       | hot: new_seg,
-        cold: cold,
+        cold: :array.resize(idx, cold),
         tail_store_handler: h,
         last_index: index
     }
@@ -583,7 +693,7 @@ defmodule ExWal do
   defp __truncate_before(
          index,
          %__MODULE__{
-           hot: %Segment{index: begin_index, blocks: blocks, buf: buf, block_count: bc} = seg,
+           hot: %Segment{index: begin_index, blocks: blocks, buf: buf, path: path},
            cold: cold,
            store: store,
            data_path: data_path,
@@ -592,16 +702,18 @@ defmodule ExWal do
          } = state
        )
        when index >= begin_index do
-    %Block{begin: offset} = :array.get(index - begin_index, blocks)
+    %Block{offset: offset} = :array.get(index - begin_index, blocks)
+
+    new_buf = binary_part(buf, offset, byte_size(buf) - offset)
+    {bc, blocks} = parse_blocks(new_buf, 0, 0, [])
 
     # remake last segment
     new_seg = %Segment{
-      seg
-      | index: index,
-        buf: binary_part(buf, offset, byte_size(buf) - offset),
-        block_count: bc - index + begin_index,
-        blocks: array_slice(blocks, (index - begin_index)..-1),
-        path: Path.join(data_path, segment_filename(index))
+      index: index,
+      buf: new_buf,
+      path: Path.join(data_path, segment_filename(index)),
+      block_count: bc,
+      blocks: :array.from_list(blocks)
     }
 
     # rewrite file
@@ -612,15 +724,24 @@ defmodule ExWal do
     # swap the tmp file with the old segment file
     :ok = Store.close(store, h)
     :ok = Store.rename(store, temp_file, new_seg.path)
+    :ok = Store.rm(store, path)
 
     # delete all segment files after the new segment
-    Enum.each(0..(:array.size(cold) - 1), fn idx ->
-      %Segment{path: path} = :array.get(idx, cold)
-      :ok = Store.rm(store, path)
-    end)
+    cold_size = :array.size(cold)
 
-    # clear cache
-    LRU.clear(lru)
+    if cold_size > 0 do
+      # Task.async_stream(0..(cold_size - 1), fn i ->
+      #   %Segment{path: path} = :array.get(i, cold)
+      #   :ok = Store.rm(store, path)
+      #   :ok = LRU.delete(lru, path)
+      # end)
+      # |> Stream.run()
+      Enum.each(0..(cold_size - 1), fn i ->
+        %Segment{path: path} = :array.get(i, cold)
+        :ok = Store.rm(store, path)
+        :ok = LRU.delete(lru, path)
+      end)
+    end
 
     # reopen tail handler
     {:ok, h} = Store.open(store, new_seg.path, [:read, :append], state.opts[:file_permission])
@@ -636,26 +757,30 @@ defmodule ExWal do
        when index < begin_index do
     idx = bin_search(cold, index)
 
-    %Segment{buf: buf, blocks: blocks, index: begin_index, block_count: bc} =
-      seg =
+    %Segment{buf: buf, blocks: blocks, index: begin_index} =
       idx
       |> :array.get(cold)
       |> load_segment(store)
 
-    %Block{begin: offset} = :array.get(index - begin_index, blocks)
+    %Block{offset: offset} = :array.get(index - begin_index, blocks)
 
     # remake segment
+
     new_seg = %Segment{
-      seg
-      | index: index,
-        buf: binary_part(buf, offset, byte_size(buf) - offset),
-        block_count: bc - index + begin_index,
-        blocks: array_slice(blocks, (index - begin_index)..-1),
-        path: Path.join(data_path, segment_filename(index))
+      index: index,
+      buf: binary_part(buf, offset, byte_size(buf) - offset),
+      path: Path.join(data_path, segment_filename(index)),
+      block_count: :array.size(blocks) - (index - begin_index)
     }
 
     # clear cache
     LRU.clear(lru)
+
+    # delete all segment files and cache before the new segment
+    Enum.each(0..idx, fn i ->
+      %Segment{path: path} = :array.get(i, cold)
+      :ok = Store.rm(store, path)
+    end)
 
     # rewrite file
     # make a tmp file to store new buf
@@ -665,14 +790,12 @@ defmodule ExWal do
     # swap the tmp file with the old segment file
     :ok = Store.rename(store, temp_file, new_seg.path)
 
-    # delete all segment files and cache before the new segment
-    Enum.each(0..(idx - 1), fn i ->
-      %Segment{path: path} = :array.get(i, cold)
-      :ok = Store.rm(store, path)
-      :ok = LRU.delete(lru, path)
-    end)
+    cold_size = :array.size(cold)
 
-    %__MODULE__{state | first_index: index, cold: array_slice(cold, idx..-1)}
+    new_cold =
+      cold |> array_slice(idx..(cold_size - 1)) |> then(fn x -> :array.set(0, %Segment{new_seg | buf: ""}, x) end)
+
+    %__MODULE__{state | first_index: index, cold: new_cold}
   end
 
   @spec array_slice(:array.array(), Range.t()) :: :array.array()

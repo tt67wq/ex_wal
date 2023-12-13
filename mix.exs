@@ -23,7 +23,8 @@ defmodule ExWal.MixProject do
   defp deps do
     [
       {:nimble_options, "~> 0.5"},
-      {:styler, "~> 0.10", only: [:dev, :test], runtime: false},
+      {:stream_data, "~> 0.5", only: :test},
+      {:styler, "~> 0.11", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.3", only: [:dev], runtime: false},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:ex_doc, "~> 0.29", only: :dev, runtime: false}

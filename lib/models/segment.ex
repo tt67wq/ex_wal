@@ -20,10 +20,10 @@ defmodule ExWal.Models.Block do
   a single block in a segment file
   """
 
-  defstruct begin: 0, size: 0
+  defstruct offset: 0, size: 0
 
   @type t :: %__MODULE__{
-          begin: non_neg_integer(),
+          offset: non_neg_integer(),
           size: non_neg_integer()
         }
 end
