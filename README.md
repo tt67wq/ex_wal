@@ -22,6 +22,13 @@ def deps do
 end
 ```
 
+## Design
+This project has heavily borrowed the code experience from the project at [tidwall/wal](https://github.com/tidwall/wal). In terms of design, WAL packages log entries into individual segments for maintenance. I take the last segment being written as the "hot" part, and while writing hot data, corresponding files will be appended. When the volume of "hot" data exceeds the configured value, we will transfer the hot data to the "cold" part and reopen a new "hot" segment.
+
+In the process of reading, in order to avoid frequent opening of cold data, I added an LRU cache to accelerate the reading speed of local data.
+
+In the operations of maintaining Segment and corresponding log entry, there are a considerable number of operations that find field based on index. However, the performance of [List](https://hexdocs.pm/elixir/List.html) provided by Elixir is not ideal in this situation, so we choose to use the [array](https://www.erlang.org/doc/man/array) module of erlang to store segment and block.
+
 ## Usage
 
 ```elixir
