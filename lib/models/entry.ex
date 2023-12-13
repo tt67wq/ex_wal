@@ -10,6 +10,14 @@ defmodule ExWal.Models.Entry do
           data: binary()
         }
 
+  @doc """
+  Create a new entry
+
+  ## Examples
+
+      iex> Entry.new(1, "Hello Elixir")
+      %Entry{index: 1, data: "Hello Elixir"}
+  """
   @spec new(non_neg_integer(), binary()) :: t()
   def new(index, data), do: %__MODULE__{index: index, data: data}
 end

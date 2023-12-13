@@ -47,3 +47,6 @@ Logger.info("first: #{first}")
 :ok = ExWal.truncate_after(:wal_test, latest - 5)
 latest = ExWal.last_index(:wal_test)
 Logger.info("latest: #{latest}")
+
+ExWal.clear(:wal_test)
+ExWal.stop(:wal_test)

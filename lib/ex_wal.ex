@@ -98,25 +98,51 @@ defmodule ExWal do
 
   @type wal_option_schema_t :: [unquote(NimbleOptions.option_typespec(@wal_option_schema))]
 
+  @doc """
+  Start a WAL process
+
+  ## Options
+  #{NimbleOptions.docs(@wal_option_schema)}
+  """
   @spec start_link(wal_option_schema_t()) :: GenServer.on_start()
   def start_link(opts) do
     opts = NimbleOptions.validate!(opts, @wal_option_schema)
     GenServer.start_link(__MODULE__, opts, name: opts[:name])
   end
 
+  @doc """
+  Stop a WAL process
+  """
   @spec stop(atom() | pid()) :: :ok
   def stop(name_or_pid) do
     GenServer.stop(name_or_pid)
   end
 
-  @spec write(atom() | pid(), [Entry.t()]) :: :ok
-  def write(name_or_pid, entries) do
-    GenServer.call(name_or_pid, {:write, entries})
+  @doc """
+  Write entries to WAL, the entries must be strictly consecutive and incremental,
+  and the index of the first entry must be WAL's last_index + 1.
+
+  ## Examples
+
+      iex> last_index = ExWal.last_index(:wal_name)
+      iex> enties = last_index..(last_index+10) |> Enum.map(fn i -> Entry.new(i, "some data") end)
+      iex> :ok = ExWal.write(:wal_name, entries)
+  """
+  @spec write(atom() | pid(), [Entry.t()], non_neg_integer()) :: :ok
+  def write(name_or_pid, entries, timeout \\ 5000) do
+    GenServer.call(name_or_pid, {:write, entries}, timeout)
   end
 
+  @doc """
+  Read entry content from WAL by index. if index is not found, return {:error, :index_not_found}
+
+  ## Examples
+
+      iex> {:ok, data} = ExWal.read(:wal_name, 1)
+  """
   @spec read(atom() | pid(), index()) :: {:ok, binary()} | {:error, :index_not_found}
-  def read(name_or_pid, index) do
-    GenServer.call(name_or_pid, {:read, index})
+  def read(name_or_pid, index, timeout \\ 5000) do
+    GenServer.call(name_or_pid, {:read, index}, timeout)
   end
 
   @spec last_index(atom() | pid()) :: index()
