@@ -2,20 +2,43 @@ defmodule ExWal.MixProject do
   @moduledoc false
   use Mix.Project
 
+  @name "ex_wal"
+  @version "0.1.0"
+  @repo_url "https://github.com/tt67wq/ex_wal"
+  @description "ExWal is a project that aims to provide a solution for managing write-ahead log (WAL) in Elixir."
+
   def project do
     [
       app: :ex_wal,
-      version: "0.1.0",
+      version: @version,
       elixir: "~> 1.15",
       start_permanent: Mix.env() == :prod,
-      deps: deps()
+      elixirc_paths: elixirc_paths(Mix.env()),
+      deps: deps(),
+      source_url: @repo_url,
+      name: @name,
+      package: package(),
+      description: @description
     ]
   end
+
+  defp elixirc_paths(:test), do: ["lib", "test"]
+  defp elixirc_paths(:dev), do: ["lib", "examples"]
+  defp elixirc_paths(_), do: ["lib"]
 
   # Run "mix help compile.app" to learn about applications.
   def application do
     [
       extra_applications: [:logger]
+    ]
+  end
+
+  defp package do
+    [
+      licenses: ["MIT"],
+      links: %{
+        "GitHub" => @repo_url
+      }
     ]
   end
 

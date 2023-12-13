@@ -1,5 +1,7 @@
 defmodule ExWal.Models.Entry do
-  @moduledoc false
+  @moduledoc """
+  entry struct for each record in WAL
+  """
 
   defstruct index: 0, data: ""
 
@@ -7,4 +9,7 @@ defmodule ExWal.Models.Entry do
           index: non_neg_integer(),
           data: binary()
         }
+
+  @spec new(non_neg_integer(), binary()) :: t()
+  def new(index, data), do: %__MODULE__{index: index, data: data}
 end

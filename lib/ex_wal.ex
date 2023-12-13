@@ -1,7 +1,8 @@
 defmodule ExWal do
-  @moduledoc """
-  Documentation for `ExWal`.
-  """
+  @moduledoc "README.md"
+             |> File.read!()
+             |> String.split("<!-- MDOC !-->")
+             |> Enum.fetch!(1)
 
   use GenServer
 
@@ -12,6 +13,7 @@ defmodule ExWal do
   alias ExWal.Store
   alias ExWal.Uvarint
 
+  @external_resource "README.md"
   @wal_option_schema [
     path: [
       type: :string,
