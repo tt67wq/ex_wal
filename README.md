@@ -8,8 +8,6 @@ ExWal is a GenServer-based module that provides functionality for working with a
 
 The module includes utilities for managing WAL files, segments, blocks, and entries. It also supports options for customizing the WAL path, synchronization behavior, segment size, segment cache size, and the underlying store module.
 
-For more information on how to use ExWal, refer to the [documentation](https://hex.pm/docs/publish) and examples.
-
 ## Installation
 
 The package can be installed by adding `ex_wal` to your list of dependencies in `mix.exs`:
