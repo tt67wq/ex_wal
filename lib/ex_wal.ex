@@ -271,13 +271,7 @@ defmodule ExWal do
     if Enum.empty?(segments) do
       seg1_path = Path.join(path, segment_filename(1))
 
-      {:ok, h} =
-        Store.open(
-          store,
-          seg1_path,
-          [:read, :append],
-          opts[:file_permission]
-        )
+      {:ok, h} = Store.open(store, seg1_path, opts[:file_permission])
 
       {:ok,
        %__MODULE__{
@@ -301,7 +295,7 @@ defmodule ExWal do
       first_index = List.last(segments).index
 
       [%Segment{path: spath} = seg | t] = segments
-      {:ok, h} = Store.open(store, spath, [:read, :append], opts[:file_permission])
+      {:ok, h} = Store.open(store, spath, opts[:file_permission])
 
       {:ok,
        %__MODULE__{
@@ -458,13 +452,7 @@ defmodule ExWal do
     # reinit
     seg1_path = Path.join(data_path, segment_filename(1))
 
-    {:ok, h} =
-      Store.open(
-        store,
-        seg1_path,
-        [:read, :append],
-        opts[:file_permission]
-      )
+    {:ok, h} = Store.open(store, seg1_path, opts[:file_permission])
 
     {:noreply,
      %__MODULE__{
@@ -560,10 +548,6 @@ defmodule ExWal do
 
     :ok = Store.append(store, h, data)
 
-    # unless opts[:nosync] do
-    #   :ok = Store.sync(store, h)
-    # end
-
     m = %__MODULE__{m | hot: seg, last_index: begin_index + bc - 1}
 
     if byte_size(buf) < opts[:segment_size] do
@@ -597,7 +581,7 @@ defmodule ExWal do
       index: last_index + 1
     }
 
-    {:ok, h} = Store.open(store, new_seg.path, [:read, :append], opts[:file_permission])
+    {:ok, h} = Store.open(store, new_seg.path, opts[:file_permission])
 
     size = :array.size(cold)
 
@@ -706,7 +690,7 @@ defmodule ExWal do
     :ok = Store.rename(store, temp_file, path)
 
     # reopen tail handler
-    {:ok, h} = Store.open(store, path, [:read, :append], state.opts[:file_permission])
+    {:ok, h} = Store.open(store, path, state.opts[:file_permission])
 
     # no need to gc blocks, reset block_count is all we need
     %__MODULE__{
@@ -778,7 +762,7 @@ defmodule ExWal do
     :ok = Store.rm(store, hot_path)
 
     # reopen tail handler
-    {:ok, h} = Store.open(store, path, [:read, :append], state.opts[:file_permission])
+    {:ok, h} = Store.open(store, path, state.opts[:file_permission])
 
     %__MODULE__{
       state
@@ -844,7 +828,7 @@ defmodule ExWal do
     end
 
     # reopen tail handler
-    {:ok, h} = Store.open(store, new_seg.path, [:read, :append], state.opts[:file_permission])
+    {:ok, h} = Store.open(store, new_seg.path, state.opts[:file_permission])
 
     %__MODULE__{state | hot: new_seg, first_index: index, cold: :array.new(), tail_store_handler: h}
   end

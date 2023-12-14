@@ -7,10 +7,9 @@ defmodule ExWal.Store do
   @type path :: String.t()
   @type handler :: pid() | :file.fd()
   @type permision :: non_neg_integer()
-  @type mode :: [:read | :write | :binary | :append | :directory]
 
   @callback new(opts :: keyword()) :: t()
-  @callback open(t(), path(), mode(), permision()) :: {:ok, handler()} | {:error, term()}
+  @callback open(t(), path(), permision()) :: {:ok, handler()} | {:error, term()}
   @callback read_all(t(), path()) :: {:ok, binary()} | {:error, term()}
   @callback write_all(t(), path(), binary()) :: :ok | {:error, term()}
   @callback append(t(), handler(), binary()) :: :ok | {:error, term()}
@@ -20,8 +19,8 @@ defmodule ExWal.Store do
   @callback rename(t(), path(), path()) :: :ok | {:error, term()}
   @callback rm(t(), path()) :: :ok | {:error, term()}
 
-  @spec open(t(), path(), mode(), permision()) :: {:ok, handler()} | {:error, term()}
-  def open(store, path, mode, permission), do: delegate(store, :open, [path, mode, permission])
+  @spec open(t(), path(), permision()) :: {:ok, handler()} | {:error, term()}
+  def open(store, path, permission), do: delegate(store, :open, [path, permission])
 
   @spec read_all(t(), path()) :: {:ok, binary()} | {:error, term()}
   def read_all(store, path), do: delegate(store, :read_all, [path])
@@ -63,12 +62,12 @@ defmodule ExWal.Store.File do
 
   def new(_opts), do: %__MODULE__{}
 
-  def open(_store, path, mode, permission) do
+  def open(_store, path, permission) do
     path
-    |> File.open(mode)
+    |> :file.open([:write, :raw])
     |> case do
       {:ok, io} ->
-        File.chmod!(path, permission)
+        :ok = :file.change_mode(path, permission)
         {:ok, io}
 
       {:error, reason} ->
@@ -82,7 +81,7 @@ defmodule ExWal.Store.File do
 
   def append(_, handler, data), do: :file.write(handler, data)
 
-  def sync(_, handler), do: :file.sync(handler)
+  def sync(_, handler), do: :file.datasync(handler)
 
   def close(_, handler), do: :file.close(handler)
 
