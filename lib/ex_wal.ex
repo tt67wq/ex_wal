@@ -546,7 +546,13 @@ defmodule ExWal do
   end
 
   @spec write_entries([Entry.t()], t()) :: t()
-  defp write_entries([], m), do: m
+  defp write_entries([], %__MODULE__{tail_store_handler: h, opts: opts, store: store} = m) do
+    unless opts[:nosync] do
+      :ok = Store.sync(store, h)
+    end
+
+    m
+  end
 
   defp write_entries([entry | t], %__MODULE__{hot: seg, opts: opts, store: store, tail_store_handler: h} = m) do
     {data, %Segment{buf: buf, index: begin_index, block_count: bc} = seg} =
@@ -554,9 +560,9 @@ defmodule ExWal do
 
     :ok = Store.append(store, h, data)
 
-    if opts[:nosync] do
-      :ok = Store.sync(store, h)
-    end
+    # unless opts[:nosync] do
+    #   :ok = Store.sync(store, h)
+    # end
 
     m = %__MODULE__{m | hot: seg, last_index: begin_index + bc - 1}
 
