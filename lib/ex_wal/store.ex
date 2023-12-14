@@ -64,7 +64,7 @@ defmodule ExWal.Store.File do
 
   def open(_store, path, permission) do
     path
-    |> :file.open([:write, :raw])
+    |> :file.open([:append, :raw, :binary])
     |> case do
       {:ok, io} ->
         :ok = :file.change_mode(path, permission)
