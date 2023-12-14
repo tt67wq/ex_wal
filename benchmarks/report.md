@@ -1,4 +1,5 @@
 # Version: v0.1.0
+----
 ## Write Single Entry
 
 ```

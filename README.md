@@ -76,6 +76,7 @@ Logger.info("latest: #{latest}") # should be latest - 5
 
 ## Benchmark
 
+See [benchmarks/report.md](benchmarks/report.md) for more details.
 
 -----
 Documentation can be generated with [ExDoc](https://github.com/elixir-lang/ex_doc)
