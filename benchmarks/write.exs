@@ -1,5 +1,12 @@
 data_dir = "./tmp/wal_write"
 
+cleanup = fn ->
+  with {:ok, files} <- File.ls(data_dir) do
+    for file <- files, do: File.rm(Path.join(data_dir, file))
+    File.rmdir(data_dir)
+  end
+end
+
 small = "small value"
 {:ok, one_kb} = File.read("benchmarks/data/1k")
 {:ok, one_mb} = File.read("benchmarks/data/1m")
@@ -35,5 +42,6 @@ Benchee.run(
     IO.puts("#{ExWal.last_index(name)} entries written to WAL.")
     ExWal.clear(name)
     ExWal.stop(name)
+    cleanup.()
   end
 )
