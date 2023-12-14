@@ -23,7 +23,7 @@ defmodule ExWal.MixProject do
   end
 
   defp elixirc_paths(:test), do: ["lib", "test"]
-  defp elixirc_paths(:dev), do: ["lib", "examples"]
+  defp elixirc_paths(:dev), do: ["lib", "examples", "benchmarks"]
   defp elixirc_paths(_), do: ["lib"]
 
   # Run "mix help compile.app" to learn about applications.
@@ -46,6 +46,7 @@ defmodule ExWal.MixProject do
   defp deps do
     [
       {:nimble_options, "~> 0.5"},
+      {:benchee, "~> 1.2", only: :dev},
       {:stream_data, "~> 0.5", only: :test},
       {:styler, "~> 0.11", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.3", only: [:dev], runtime: false},
