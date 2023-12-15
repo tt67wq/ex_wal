@@ -27,6 +27,9 @@ In the process of reading, in order to avoid frequent opening of cold data, I ad
 
 In the operations of maintaining Segment and corresponding log entry, there are a considerable number of operations that find field based on index. However, the performance of [List](https://hexdocs.pm/elixir/List.html) provided by Elixir is not ideal in this situation, so we choose to use the [array](https://www.erlang.org/doc/man/array) module of erlang to store segment and block.
 
+### Store
+This project has designed the storage part as a behavior (`ExWal.Store`), defining a series of storage operations. The default implementation is file storage `ExWal.Store.File`. This implementation is pluggable, allowing users to implement this behavior themselves and replace it. It is even possible to consider implementing it using object storage from public cloud services like S3.
+
 ## Usage
 
 ```elixir
