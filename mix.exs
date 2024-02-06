@@ -46,7 +46,7 @@ defmodule ExWal.MixProject do
   defp deps do
     [
       {:nimble_options, "~> 0.5"},
-      {:benchee, "~> 1.2", only: :dev},
+      {:benchee, "~> 1.3", only: :dev},
       {:stream_data, "~> 0.5", only: :test},
       {:styler, "~> 0.11", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.3", only: [:dev], runtime: false},
