@@ -3,7 +3,7 @@ defmodule ExWal.MixProject do
   use Mix.Project
 
   @name "ex_wal"
-  @version "0.1.1"
+  @version "0.1.2"
   @repo_url "https://github.com/tt67wq/ex_wal"
   @description "ExWal is a project that aims to provide a solution for managing write-ahead log (WAL) in Elixir."
 
@@ -45,7 +45,7 @@ defmodule ExWal.MixProject do
   # Run "mix help deps" to learn about dependencies.
   defp deps do
     [
-      {:nimble_options, "~> 0.5"},
+      {:nimble_options, "~> 1.1"},
       {:benchee, "~> 1.3", only: :dev},
       {:stream_data, "~> 0.5", only: :test},
       {:styler, "~> 0.11", only: [:dev, :test], runtime: false},
