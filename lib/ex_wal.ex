@@ -13,6 +13,8 @@ defmodule ExWal do
   alias ExWal.Store
   alias ExWal.Uvarint
 
+  require Logger
+
   @external_resource "README.md"
   @wal_option_schema [
     path: [
@@ -140,7 +142,7 @@ defmodule ExWal do
 
       iex> {:ok, data} = ExWal.read(:wal_name, 1)
   """
-  @spec read(atom() | pid(), index()) :: {:ok, binary()} | {:error, :index_not_found}
+  @spec read(atom() | pid(), index()) :: {:ok, Entry.t()} | {:error, :index_not_found}
   def read(name_or_pid, index, timeout \\ 5000) do
     GenServer.call(name_or_pid, {:read, index}, timeout)
   end
@@ -369,9 +371,10 @@ defmodule ExWal do
   end
 
   def handle_call({:read, index}, _from, %__MODULE__{} = state) do
-    %Segment{index: begin_index, blocks: blocks, buf: buf} = find_segment(index, state)
+    %Segment{index: begin_index, blocks: blocks, buf: _buf, caches: caches} = find_segment(index, state)
 
-    %Block{offset: offset, size: size} = :array.get(index - begin_index, blocks)
+    %Block{offset: _offset, size: _size, data: data} = :array.get(index - begin_index, blocks)
+    cache = :array.get(index - begin_index, caches)
 
     # ExWal.Debug.stacktrace(%{
     #   target_index: index,
@@ -381,12 +384,11 @@ defmodule ExWal do
     #   buf_size: byte_size(buf)
     # })
 
-    data = binary_part(buf, offset, size)
-    {data_size, _, data} = Uvarint.decode(data)
-    # ExWal.Debug.debug(data)
-    byte_size(data) == data_size || raise ArgumentError, "invalid data"
+    # data = binary_part(buf, offset, size)
+    # {data_size, _, data} = Uvarint.decode(data)
+    # byte_size(data) == data_size || raise ArgumentError, "invalid data"
 
-    {:reply, {:ok, data}, state}
+    {:reply, {:ok, Entry.new(index, data, cache)}, state}
   end
 
   def handle_call({:truncate_after, 0}, _from, state), do: {:reply, {:error, :index_out_of_range}, state}
@@ -473,7 +475,14 @@ defmodule ExWal do
     {:ok, content} = Store.read_all(store, path)
 
     {bc, blocks} = parse_blocks(content, 0, 0, [])
-    %Segment{seg | buf: content, blocks: :array.from_list(blocks), block_count: bc}
+
+    %Segment{
+      seg
+      | buf: content,
+        blocks: :array.from_list(blocks),
+        block_count: bc,
+        caches: nil |> List.duplicate(bc) |> :array.from_list()
+    }
   end
 
   @spec parse_segment_filename(String.t()) :: index()
@@ -499,37 +508,39 @@ defmodule ExWal do
           {block_count :: non_neg_integer(), blocks :: [Block.t()]}
   defp parse_blocks("", _, bc, blocks), do: {bc, Enum.reverse(blocks)}
 
-  defp parse_blocks(data, since, bc, acc) do
+  defp parse_blocks(data, since, bc, blocks) do
     {size, bytes_read, data} = Uvarint.decode(data)
 
     # check
     size == 0 && raise ArgumentError, "invalid block size"
 
     next = since + size + bytes_read
-    <<_::bytes-size(size), rest::binary>> = data
+    <<bin::bytes-size(size), rest::binary>> = data
 
     parse_blocks(rest, next, bc + 1, [
-      %Block{offset: since, size: size + bytes_read} | acc
+      %Block{offset: since, size: size + bytes_read, data: bin} | blocks
     ])
   end
 
   @spec append_entry(Segment.t(), Entry.t()) :: {binary(), Segment.t()}
-  defp append_entry(%Segment{buf: buf, index: begin_index, block_count: bc, blocks: blocks} = seg, %Entry{
+  defp append_entry(%Segment{buf: buf, index: begin_index, block_count: bc, blocks: blocks, caches: caches} = seg, %Entry{
          index: index,
-         data: data
+         data: data,
+         cache: cache
        }) do
     index == begin_index + bc ||
       raise ArgumentError,
             "invalid index, begin_index: #{begin_index}, bc: #{bc}, index: #{index}"
 
-    data = Uvarint.encode(byte_size(data)) <> data
+    data_with_size = Uvarint.encode(byte_size(data)) <> data
 
-    {data,
+    {data_with_size,
      %Segment{
        seg
-       | buf: <<buf::binary, data::binary>>,
+       | buf: <<buf::binary, data_with_size::binary>>,
          block_count: bc + 1,
-         blocks: :array.set(bc, %Block{offset: byte_size(buf), size: byte_size(data)}, blocks)
+         blocks: :array.set(bc, %Block{offset: byte_size(buf), size: byte_size(data_with_size), data: data}, blocks),
+         caches: :array.set(bc, cache, caches)
      }}
   end
 
@@ -589,7 +600,7 @@ defmodule ExWal do
       m
       | tail_store_handler: h,
         hot: new_seg,
-        cold: :array.set(size, %Segment{seg | blocks: nil, buf: ""}, cold),
+        cold: :array.set(size, %Segment{seg | blocks: nil, caches: nil, buf: ""}, cold),
         last_index: last_index
     }
   end
@@ -797,7 +808,8 @@ defmodule ExWal do
       buf: new_buf,
       path: Path.join(data_path, segment_filename(index)),
       block_count: bc,
-      blocks: :array.from_list(blocks)
+      blocks: :array.from_list(blocks),
+      caches: nil |> List.duplicate(bc) |> :array.from_list()
     }
 
     # rewrite file

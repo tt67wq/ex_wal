@@ -79,20 +79,28 @@ defmodule ExWalTest do
       assert {:error, :index_not_found} == ExWal.read(opts[:name], 100)
     end
 
+    @tag :run
     test "read random", %{opts: opts} do
       start_supervised!({ExWal, opts})
 
       max_idx = 1000
 
       entries =
-        Enum.map(1..max_idx, fn i -> %Entry{index: i, data: "Hello Elixir #{i}"} end)
+        Enum.map(1..max_idx, fn i -> %Entry{index: i, data: "Hello Elixir #{i}", cache: "Cache #{i}"} end)
 
       :ok = ExWal.write(opts[:name], entries)
 
       1..max_idx
       |> StreamData.integer()
       |> Enum.take(500)
-      |> Enum.each(fn idx -> assert {:ok, "Hello Elixir #{idx}"} == ExWal.read(opts[:name], idx) end)
+      |> Enum.each(fn idx ->
+        {:ok, %Entry{index: idx, data: data, cache: cache}} = ExWal.read(opts[:name], idx)
+        assert "Hello Elixir #{idx}" == data
+
+        unless is_nil(cache) do
+          assert "Cache #{idx}" == cache
+        end
+      end)
     end
   end
 
@@ -136,7 +144,12 @@ defmodule ExWalTest do
         assert to_truncate == ExWal.first_index(opts[:name])
 
         Enum.each(to_truncate..max_entries, fn idx ->
-          assert {:ok, "Hello Elixir #{idx}"} == ExWal.read(opts[:name], idx)
+          {:ok, %Entry{index: idx, data: data, cache: cache}} = ExWal.read(opts[:name], idx)
+          assert "Hello Elixir #{idx}" == data
+
+          unless is_nil(cache) do
+            assert "Cache #{idx}" == cache
+          end
         end)
 
         if to_truncate - 1 > 0 do
@@ -193,7 +206,14 @@ defmodule ExWalTest do
 
         assert to_truncate == ExWal.last_index(opts[:name])
 
-        Enum.each(1..to_truncate, fn idx -> assert {:ok, "Hello Elixir #{idx}"} == ExWal.read(opts[:name], idx) end)
+        Enum.each(1..to_truncate, fn idx ->
+          {:ok, %Entry{index: idx, data: data, cache: cache}} = ExWal.read(opts[:name], idx)
+          assert "Hello Elixir #{idx}" == data
+
+          unless is_nil(cache) do
+            assert "Cache #{idx}" == cache
+          end
+        end)
 
         if to_truncate + 1 <= max_entries do
           Enum.each((to_truncate + 1)..max_entries, fn idx ->

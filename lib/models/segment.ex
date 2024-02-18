@@ -22,7 +22,7 @@ defmodule ExWal.Models.Segment do
 
   """
 
-  defstruct path: "", index: 1, buf: "", block_count: 0, blocks: :array.new()
+  defstruct path: "", index: 1, buf: "", block_count: 0, blocks: :array.new(), caches: :array.new()
 
   @type t :: %__MODULE__{
           path: String.t(),
@@ -30,7 +30,8 @@ defmodule ExWal.Models.Segment do
           index: non_neg_integer(),
           buf: binary(),
           block_count: non_neg_integer(),
-          blocks: :array.array(ExWal.Models.Block.t()) | nil
+          blocks: :array.array(ExWal.Models.Block.t()) | nil,
+          caches: :array.array(any()) | nil
         }
 end
 
@@ -52,13 +53,15 @@ defmodule ExWal.Models.Block do
 
   - `offset` - The offset of the block within the segment file.
   - `size` - The size of the block in bytes.
+  - `data` - The binary data of the block.
 
   """
 
-  defstruct offset: 0, size: 0
+  defstruct offset: 0, size: 0, data: ""
 
   @type t :: %__MODULE__{
           offset: non_neg_integer(),
-          size: non_neg_integer()
+          size: non_neg_integer(),
+          data: binary()
         }
 end
