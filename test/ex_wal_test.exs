@@ -73,13 +73,15 @@ defmodule ExWalTest do
   end
 
   describe "read" do
+    @tag :run
     test "read not_exists", %{opts: opts} do
       start_supervised!({ExWal, opts})
 
+      assert {:error, :index_not_found} == ExWal.read(opts[:name], 0)
       assert {:error, :index_not_found} == ExWal.read(opts[:name], 100)
     end
 
-    @tag :run
+    # @tag :run
     test "read random", %{opts: opts} do
       start_supervised!({ExWal, opts})
 
@@ -102,6 +104,22 @@ defmodule ExWalTest do
         end
       end)
     end
+  end
+
+  test "last_index", %{opts: opts} do
+    start_supervised!({ExWal, opts})
+
+    assert 0 == ExWal.last_index(opts[:name])
+
+    assert :ok == ExWal.write(opts[:name], [%Entry{index: 1, data: "Hello Elixir 1"}])
+    assert 1 == ExWal.last_index(opts[:name])
+
+    entries =
+      Enum.map(2..100, fn i -> %Entry{index: i, data: "Hello Elixir #{i}"} end)
+
+    :ok = ExWal.write(opts[:name], entries)
+
+    assert 100 == ExWal.last_index(opts[:name])
   end
 
   describe "truncate before" do

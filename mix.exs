@@ -3,7 +3,7 @@ defmodule ExWal.MixProject do
   use Mix.Project
 
   @name "ex_wal"
-  @version "0.1.2"
+  @version "0.1.3"
   @repo_url "https://github.com/tt67wq/ex_wal"
   @description "ExWal is a project that aims to provide a solution for managing write-ahead log (WAL) in Elixir."
 
