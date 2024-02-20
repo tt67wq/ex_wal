@@ -20,10 +20,10 @@ defmodule ExWalTest do
   describe "start_link" do
     test "start_link with empty path", %{opts: opts} do
       start_supervised!({ExWal, opts})
-      assert 0 == ExWal.last_index(opts[:name])
+      assert -1 == ExWal.last_index(opts[:name])
 
       entries =
-        Enum.map(1..100, fn i -> %Entry{index: i, data: "Hello Elixir #{i}"} end)
+        Enum.map(0..100, fn i -> %Entry{index: i, data: "Hello Elixir #{i}"} end)
 
       :ok = ExWal.write(opts[:name], entries)
     end
@@ -33,35 +33,23 @@ defmodule ExWalTest do
       start_supervised!({ExWal, opts}, restart: :temporary)
 
       entries =
-        Enum.map(1..100, fn i -> %Entry{index: i, data: "Hello Elixir #{i}"} end)
+        Enum.map(0..100, fn i -> %Entry{index: i, data: "Hello Elixir #{i}"} end)
 
       :ok = ExWal.write(opts[:name], entries)
 
       assert 100 == ExWal.last_index(opts[:name])
-
-      # ExWal.stop(opts[:name])
-
-      # # start with existing path
-      # start_supervised!({ExWal, opts})
-      # assert 100 == ExWal.last_index(opts[:name])
-
-      # entries =
-      #   Enum.map(1..100, fn i -> %Entry{index: i + 100, data: "Hello Elixir #{i + 100}"} end)
-
-      # :ok = ExWal.write(opts[:name], entries)
-      # assert 200 == ExWal.last_index(opts[:name])
     end
   end
 
   describe "write" do
     test "write multiple entries", %{opts: opts} do
       start_supervised!({ExWal, opts})
-      assert 0 == ExWal.last_index(opts[:name])
+      assert -1 == ExWal.last_index(opts[:name])
 
       max_idx = 1000
 
       entries =
-        Enum.map(1..max_idx, fn i -> %Entry{index: i, data: "Hello Elixir #{i}"} end)
+        Enum.map(0..max_idx, fn i -> %Entry{index: i, data: "Hello Elixir #{i}"} end)
 
       :ok = ExWal.write(opts[:name], entries)
       assert max_idx == ExWal.last_index(opts[:name])
@@ -73,7 +61,6 @@ defmodule ExWalTest do
   end
 
   describe "read" do
-    @tag :run
     test "read not_exists", %{opts: opts} do
       start_supervised!({ExWal, opts})
 
@@ -81,18 +68,17 @@ defmodule ExWalTest do
       assert {:error, :index_not_found} == ExWal.read(opts[:name], 100)
     end
 
-    # @tag :run
     test "read random", %{opts: opts} do
       start_supervised!({ExWal, opts})
 
       max_idx = 1000
 
       entries =
-        Enum.map(1..max_idx, fn i -> %Entry{index: i, data: "Hello Elixir #{i}", cache: "Cache #{i}"} end)
+        Enum.map(0..max_idx, fn i -> %Entry{index: i, data: "Hello Elixir #{i}", cache: "Cache #{i}"} end)
 
       :ok = ExWal.write(opts[:name], entries)
 
-      1..max_idx
+      0..max_idx
       |> StreamData.integer()
       |> Enum.take(500)
       |> Enum.each(fn idx ->
@@ -109,13 +95,13 @@ defmodule ExWalTest do
   test "last_index", %{opts: opts} do
     start_supervised!({ExWal, opts})
 
+    assert -1 == ExWal.last_index(opts[:name])
+
+    assert :ok == ExWal.write(opts[:name], [%Entry{index: 0, data: "Hello Elixir 1"}])
     assert 0 == ExWal.last_index(opts[:name])
 
-    assert :ok == ExWal.write(opts[:name], [%Entry{index: 1, data: "Hello Elixir 1"}])
-    assert 1 == ExWal.last_index(opts[:name])
-
     entries =
-      Enum.map(2..100, fn i -> %Entry{index: i, data: "Hello Elixir #{i}"} end)
+      Enum.map(1..100, fn i -> %Entry{index: i, data: "Hello Elixir #{i}"} end)
 
     :ok = ExWal.write(opts[:name], entries)
 
@@ -129,14 +115,15 @@ defmodule ExWalTest do
       assert {:error, :index_out_of_range} == ExWal.truncate_before(opts[:name], 100)
 
       entries =
-        Enum.map(1..100, fn i -> %Entry{index: i, data: "Hello Elixir #{i}"} end)
+        Enum.map(0..100, fn i -> %Entry{index: i, data: "Hello Elixir #{i}"} end)
 
       :ok = ExWal.write(opts[:name], entries)
 
       assert {:error, :index_out_of_range} == ExWal.truncate_before(opts[:name], 101)
-      assert {:error, :index_out_of_range} == ExWal.truncate_before(opts[:name], 0)
+      assert {:error, :index_out_of_range} == ExWal.truncate_before(opts[:name], -1)
 
       assert :ok == ExWal.truncate_before(opts[:name], 10)
+      assert 10 == ExWal.first_index(opts[:name])
       assert {:error, :index_out_of_range} == ExWal.truncate_before(opts[:name], 9)
     end
 
@@ -146,14 +133,14 @@ defmodule ExWalTest do
       max_entries = 1000
       test_round = 500
 
-      1..(max_entries - 1)
+      0..(max_entries - 1)
       |> StreamData.integer()
       |> Enum.take(test_round)
       |> Enum.each(fn to_truncate ->
         Logger.info("to_truncate: #{to_truncate}")
 
         entries =
-          Enum.map(1..max_entries, fn i -> %Entry{index: i, data: "Hello Elixir #{i}"} end)
+          Enum.map(0..max_entries, fn i -> %Entry{index: i, data: "Hello Elixir #{i}"} end)
 
         :ok = ExWal.write(opts[:name], entries)
 
@@ -186,23 +173,28 @@ defmodule ExWalTest do
   end
 
   describe "truncate after" do
+    @tag :run
     test "truncate invalid index", %{opts: opts} do
       start_supervised!({ExWal, opts})
 
       assert {:error, :index_out_of_range} == ExWal.truncate_after(opts[:name], 100)
 
       entries =
-        Enum.map(1..100, fn i -> %Entry{index: i, data: "Hello Elixir #{i}"} end)
+        Enum.map(0..100, fn i -> %Entry{index: i, data: "Hello Elixir #{i}"} end)
 
       :ok = ExWal.write(opts[:name], entries)
 
       assert {:error, :index_out_of_range} == ExWal.truncate_after(opts[:name], 101)
-      assert {:error, :index_out_of_range} == ExWal.truncate_after(opts[:name], 0)
 
       assert :ok == ExWal.truncate_after(opts[:name], 10)
+      assert 10 == ExWal.last_index(opts[:name])
       assert {:error, :index_out_of_range} == ExWal.truncate_after(opts[:name], 11)
+
+      assert :ok == ExWal.truncate_after(opts[:name], -1)
+      assert -1 == ExWal.last_index(opts[:name])
     end
 
+    @tag :run
     test "chaos", %{opts: opts} do
       start_supervised!({ExWal, opts})
 
@@ -216,7 +208,7 @@ defmodule ExWalTest do
         Logger.info("to_truncate: #{to_truncate}")
 
         entries =
-          Enum.map(1..max_entries, fn i -> %Entry{index: i, data: "Hello Elixir #{i}"} end)
+          Enum.map(0..max_entries, fn i -> %Entry{index: i, data: "Hello Elixir #{i}"} end)
 
         :ok = ExWal.write(opts[:name], entries)
 

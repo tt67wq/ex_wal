@@ -67,8 +67,8 @@ defmodule ExWal do
   defstruct data_path: "",
             hot: %Segment{},
             cold: :array.new(),
-            first_index: 0,
-            last_index: 0,
+            first_index: -1,
+            last_index: -1,
             lru_cache: nil,
             store: nil,
             tail_store_handler: nil,
@@ -83,8 +83,8 @@ defmodule ExWal do
           data_path: String.t(),
           hot: Segment.t(),
           cold: :array.array(),
-          first_index: non_neg_integer(),
-          last_index: non_neg_integer(),
+          first_index: integer(),
+          last_index: integer(),
           lru_cache: atom(),
           store: Store.t(),
           tail_store_handler: Store.handler(),
@@ -278,10 +278,10 @@ defmodule ExWal do
       {:ok,
        %__MODULE__{
          data_path: path,
-         hot: %Segment{path: seg1_path, index: 1},
+         hot: %Segment{path: seg1_path, index: 0},
          cold: :array.new(),
-         first_index: 1,
-         last_index: 0,
+         first_index: -1,
+         last_index: -1,
          lru_cache: lru_name,
          store: store,
          tail_store_handler: h,
@@ -294,9 +294,9 @@ defmodule ExWal do
        }}
     else
       # segment is in reverse order
-      first_index = List.last(segments).index
+      %Segment{index: first_index} = List.last(segments)
 
-      [%Segment{path: spath} = seg | t] = segments
+      [%Segment{path: spath, index: begin_index, block_count: bc} = seg | t] = segments
       {:ok, h} = Store.open(store, spath, opts[:file_permission])
 
       {:ok,
@@ -305,6 +305,7 @@ defmodule ExWal do
          hot: seg,
          cold: :array.from_list(t),
          first_index: first_index,
+         last_index: begin_index + bc - 1,
          lru_cache: lru_name,
          store: store,
          tail_store_handler: h,
@@ -391,7 +392,7 @@ defmodule ExWal do
     {:reply, {:ok, Entry.new(index, data, cache)}, state}
   end
 
-  def handle_call({:truncate_after, 0}, _from, state), do: {:reply, {:error, :index_out_of_range}, state}
+  def handle_call({:truncate_after, -1}, _from, state), do: {:reply, :ok, reinit(state)}
 
   def handle_call({:truncate_after, index}, _from, %__MODULE__{first_index: first_index, last_index: last_index} = state)
       when index < first_index or index > last_index do
@@ -405,9 +406,9 @@ defmodule ExWal do
     {:reply, :ok, __truncate_after(index, state)}
   end
 
-  def handle_call({:truncate_before, 0}, _from, state), do: {:reply, {:error, :index_out_of_range}, state}
+  def handle_call({:truncate_before, -1}, _from, state), do: {:reply, {:error, :index_out_of_range}, state}
 
-  def handle_call({:truncate_before, _}, _from, %__MODULE__{last_index: 0} = state),
+  def handle_call({:truncate_before, _}, _from, %__MODULE__{last_index: -1} = state),
     do: {:reply, {:error, :index_out_of_range}, state}
 
   def handle_call({:truncate_before, index}, _from, %__MODULE__{last_index: last_index, first_index: first_index} = state)
@@ -424,47 +425,8 @@ defmodule ExWal do
   end
 
   @impl GenServer
-  def handle_cast(
-        :clear,
-        %__MODULE__{
-          data_path: data_path,
-          lru_cache: lru,
-          hot: %Segment{path: path},
-          store: store,
-          tail_store_handler: h,
-          cold: cold,
-          opts: opts
-        } = state
-      ) do
-    # rm cache
-    LRU.clear(lru)
-
-    # rm hot
-    :ok = Store.close(store, h)
-    :ok = Store.rm(store, path)
-
-    # rm cold
-    if :array.size(cold) > 0 do
-      Enum.each(0..(:array.size(cold) - 1), fn i ->
-        %Segment{path: path} = :array.get(i, cold)
-        :ok = Store.rm(store, path)
-      end)
-    end
-
-    # reinit
-    seg1_path = Path.join(data_path, segment_filename(1))
-
-    {:ok, h} = Store.open(store, seg1_path, opts[:file_permission])
-
-    {:noreply,
-     %__MODULE__{
-       state
-       | hot: %Segment{path: seg1_path, index: 1},
-         cold: :array.new(),
-         first_index: 1,
-         last_index: 0,
-         tail_store_handler: h
-     }}
+  def handle_cast(:clear, state) do
+    {:noreply, reinit(state)}
   end
 
   # ----------------- Private -----------------
@@ -892,6 +854,47 @@ defmodule ExWal do
       cold |> array_slice(idx..(cold_size - 1)) |> then(fn x -> :array.set(0, %Segment{new_seg | buf: ""}, x) end)
 
     %__MODULE__{state | first_index: index, cold: new_cold}
+  end
+
+  defp reinit(
+         %__MODULE__{
+           data_path: data_path,
+           lru_cache: lru,
+           hot: %Segment{path: path},
+           store: store,
+           tail_store_handler: h,
+           cold: cold,
+           opts: opts
+         } = state
+       ) do
+    # rm cache
+    LRU.clear(lru)
+
+    # rm hot
+    :ok = Store.close(store, h)
+    :ok = Store.rm(store, path)
+
+    # rm cold
+    if :array.size(cold) > 0 do
+      Enum.each(0..(:array.size(cold) - 1), fn i ->
+        %Segment{path: path} = :array.get(i, cold)
+        :ok = Store.rm(store, path)
+      end)
+    end
+
+    # reinit
+    seg1_path = Path.join(data_path, segment_filename(1))
+
+    {:ok, h} = Store.open(store, seg1_path, opts[:file_permission])
+
+    %__MODULE__{
+      state
+      | hot: %Segment{path: seg1_path, index: 0},
+        cold: :array.new(),
+        first_index: -1,
+        last_index: -1,
+        tail_store_handler: h
+    }
   end
 
   @spec array_slice(:array.array(), Range.t()) :: :array.array()
