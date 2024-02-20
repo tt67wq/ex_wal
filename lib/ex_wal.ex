@@ -96,7 +96,7 @@ defmodule ExWal do
           ]
         }
 
-  @type index :: non_neg_integer()
+  @type index :: integer()
 
   @type wal_option_schema_t :: [unquote(NimbleOptions.option_typespec(@wal_option_schema))]
 
