@@ -5,64 +5,22 @@ defmodule ExWal do
              |> Enum.fetch!(1)
 
   use GenServer
+  use ExWal.Store
 
   alias ExWal.LRU
   alias ExWal.Models.Block
+  alias ExWal.Models.Config
   alias ExWal.Models.Entry
   alias ExWal.Models.Segment
-  alias ExWal.Store
+  alias ExWal.Typespecs
   alias ExWal.Uvarint
 
   require Logger
 
   @external_resource "README.md"
-  @wal_option_schema [
-    path: [
-      type: :string,
-      doc: "The path of the WAL. Default is `./wal`.",
-      default: "./wal"
-    ],
-    nosync: [
-      type: :boolean,
-      doc: "If true, WAL will not sync to disk. Default is false.",
-      default: false
-    ],
-    segment_size: [
-      type: :integer,
-      doc: "The size of each segment file. Default is 16MB.",
-      default: 16 * 1024 * 1024
-    ],
-    segment_cache_size: [
-      type: :integer,
-      doc: "The size of the segment cache. Default is 100.",
-      default: 2
-    ],
-    store: [
-      type: :atom,
-      doc: "The store module which implement `ExWal.Store`. Default is `ExWal.Store.File`.",
-      default: Store.File
-    ],
-    store_opts: [
-      type: :keyword_list,
-      doc: "The options for the store module.",
-      default: []
-    ],
-    dir_permission: [
-      type: :integer,
-      doc: "The permission of the directory. Default is 0o750.",
-      default: 0o750
-    ],
-    file_permission: [
-      type: :integer,
-      doc: "The permission of the file. Default is 0o640.",
-      default: 0o640
-    ],
-    name: [
-      type: :atom,
-      doc: "The name of the WAL. Default is `wal`.",
-      default: __MODULE__
-    ]
-  ]
+
+  @store_impl ExWal.Store.File
+  @store_name ExWal.File
 
   defstruct data_path: "",
             hot: %Segment{},
@@ -70,7 +28,6 @@ defmodule ExWal do
             first_index: -1,
             last_index: -1,
             lru_cache: nil,
-            store: nil,
             tail_store_handler: nil,
             opts: [
               nosync: false,
@@ -86,8 +43,7 @@ defmodule ExWal do
           first_index: integer(),
           last_index: integer(),
           lru_cache: atom(),
-          store: Store.t(),
-          tail_store_handler: Store.handler(),
+          tail_store_handler: Typespecs.handler(),
           opts: [
             nosync: boolean(),
             segment_size: non_neg_integer(),
@@ -96,19 +52,15 @@ defmodule ExWal do
           ]
         }
 
-  @type index :: integer()
-
-  @type wal_option_schema_t :: [unquote(NimbleOptions.option_typespec(@wal_option_schema))]
-
   @doc """
   Start a WAL process
 
   ## Options
-  #{NimbleOptions.docs(@wal_option_schema)}
+  #{Config.doc()}
   """
-  @spec start_link(wal_option_schema_t()) :: GenServer.on_start()
+  @spec start_link(Config.wal_option_schema_t()) :: GenServer.on_start()
   def start_link(opts) do
-    opts = NimbleOptions.validate!(opts, @wal_option_schema)
+    opts = Config.validate!(opts)
     GenServer.start_link(__MODULE__, opts, name: opts[:name])
   end
 
@@ -142,7 +94,7 @@ defmodule ExWal do
 
       iex> {:ok, data} = ExWal.read(:wal_name, 1)
   """
-  @spec read(atom() | pid(), index()) :: {:ok, Entry.t()} | {:error, :index_not_found}
+  @spec read(atom() | pid(), Typespecs.index()) :: {:ok, Entry.t()} | {:error, :index_not_found}
   def read(name_or_pid, index, timeout \\ 5000) do
     GenServer.call(name_or_pid, {:read, index}, timeout)
   end
@@ -150,7 +102,7 @@ defmodule ExWal do
   @doc """
   Get the last index of WAL
   """
-  @spec last_index(atom() | pid()) :: index()
+  @spec last_index(atom() | pid()) :: Typespecs.index()
   def last_index(name_or_pid) do
     GenServer.call(name_or_pid, :last_index)
   end
@@ -158,7 +110,7 @@ defmodule ExWal do
   @doc """
   Get the first index of WAL
   """
-  @spec first_index(atom() | pid()) :: index()
+  @spec first_index(atom() | pid()) :: Typespecs.index()
   def first_index(name_or_pid) do
     GenServer.call(name_or_pid, :first_index)
   end
@@ -191,7 +143,7 @@ defmodule ExWal do
   - `{:error, :index_out_of_range}` - If the provided index is out of range.
 
   """
-  @spec truncate_after(atom() | pid(), index(), non_neg_integer()) :: :ok | {:error, :index_out_of_range}
+  @spec truncate_after(atom() | pid(), Typespecs.index(), non_neg_integer()) :: :ok | {:error, :index_out_of_range}
   def truncate_after(name_or_pid, index, timeout \\ 5000) do
     GenServer.call(name_or_pid, {:truncate_after, index}, timeout)
   end
@@ -216,7 +168,7 @@ defmodule ExWal do
   - `{:error, :index_out_of_range}` - If the provided index is out of range.
 
   """
-  @spec truncate_before(atom() | pid(), index(), non_neg_integer()) :: :ok | {:error, :index_out_of_range}
+  @spec truncate_before(atom() | pid(), Typespecs.index(), non_neg_integer()) :: :ok | {:error, :index_out_of_range}
   def truncate_before(name_or_pid, index, timeout \\ 5000) do
     GenServer.call(name_or_pid, {:truncate_before, index}, timeout)
   end
@@ -247,13 +199,11 @@ defmodule ExWal do
 
   @impl GenServer
   def init(opts) do
-    lru_name = :"#{opts[:name]}_lru"
+    lru_name = Module.concat(opts[:name], LRU)
     {:ok, _} = LRU.start_link(lru_name, opts[:segment_cache_size])
 
-    store = apply(opts[:store], :new, [opts[:store_opts]])
-
     path = Path.absname(opts[:path])
-    Store.mkdir(store, path, opts[:dir_permission])
+    mkdir(path)
 
     segments =
       path
@@ -272,8 +222,7 @@ defmodule ExWal do
 
     if Enum.empty?(segments) do
       seg1_path = Path.join(path, segment_filename(1))
-
-      {:ok, h} = Store.open(store, seg1_path, opts[:file_permission])
+      {:ok, h} = open(seg1_path)
 
       {:ok,
        %__MODULE__{
@@ -283,13 +232,10 @@ defmodule ExWal do
          first_index: -1,
          last_index: -1,
          lru_cache: lru_name,
-         store: store,
          tail_store_handler: h,
          opts: [
            nosync: opts[:nosync],
-           segment_size: opts[:segment_size],
-           dir_permission: opts[:dir_permission],
-           file_permission: opts[:file_permission]
+           segment_size: opts[:segment_size]
          ]
        }}
     else
@@ -297,7 +243,7 @@ defmodule ExWal do
       %Segment{index: first_index} = List.last(segments)
 
       [%Segment{path: spath, index: begin_index, block_count: bc} = seg | t] = segments
-      {:ok, h} = Store.open(store, spath, opts[:file_permission])
+      {:ok, h} = open(spath)
 
       {:ok,
        %__MODULE__{
@@ -307,30 +253,26 @@ defmodule ExWal do
          first_index: first_index,
          last_index: begin_index + bc - 1,
          lru_cache: lru_name,
-         store: store,
          tail_store_handler: h,
          opts: [
            nosync: opts[:nosync],
-           segment_size: opts[:segment_size],
-           dir_permission: opts[:dir_permission],
-           file_permission: opts[:file_permission]
+           segment_size: opts[:segment_size]
          ]
        }, {:continue, :load_segment}}
     end
   end
 
   @impl GenServer
-  def terminate(_reason, %__MODULE__{lru_cache: lru, store: store, tail_store_handler: h}) do
+  def terminate(_reason, %__MODULE__{lru_cache: lru, tail_store_handler: h}) do
     LRU.stop(lru)
-    Store.sync(store, h)
-    Store.close(store, h)
+    sync(h)
+    close(h)
   end
 
   @impl GenServer
-  def handle_continue(:load_segment, %__MODULE__{hot: seg, store: store} = state) do
+  def handle_continue(:load_segment, %__MODULE__{hot: seg} = state) do
     %Segment{block_count: bc, index: begin_index} =
-      seg =
-      load_segment(seg, store)
+      seg = load_segment(seg)
 
     {:noreply, %__MODULE__{state | hot: seg, last_index: begin_index + bc - 1}}
   end
@@ -431,10 +373,10 @@ defmodule ExWal do
 
   # ----------------- Private -----------------
 
-  @spec load_segment(Segment.t(), Store.t()) :: Segment.t()
+  @spec load_segment(Segment.t()) :: Segment.t()
   #  index: begin_index,
-  defp load_segment(%Segment{path: path} = seg, store) do
-    {:ok, content} = Store.read_all(store, path)
+  defp load_segment(%Segment{path: path} = seg) do
+    {:ok, content} = read_all(path)
 
     {bc, blocks} = parse_blocks(content, 0, 0, [])
 
@@ -447,14 +389,14 @@ defmodule ExWal do
     }
   end
 
-  @spec parse_segment_filename(String.t()) :: index()
+  @spec parse_segment_filename(String.t()) :: Typespecs.index()
   defp parse_segment_filename(filename) do
     filename
     |> String.trim_leading("0")
     |> String.to_integer()
   end
 
-  @spec segment_filename(index()) :: String.t()
+  @spec segment_filename(Typespecs.index()) :: String.t()
   defp segment_filename(index) do
     index
     |> Integer.to_string()
@@ -507,19 +449,19 @@ defmodule ExWal do
   end
 
   @spec write_entries([Entry.t()], t()) :: t()
-  defp write_entries([], %__MODULE__{tail_store_handler: h, opts: opts, store: store} = m) do
+  defp write_entries([], %__MODULE__{tail_store_handler: h, opts: opts} = m) do
     unless opts[:nosync] do
-      :ok = Store.sync(store, h)
+      :ok = sync(h)
     end
 
     m
   end
 
-  defp write_entries([entry | t], %__MODULE__{hot: seg, opts: opts, store: store, tail_store_handler: h} = m) do
+  defp write_entries([entry | t], %__MODULE__{hot: seg, opts: opts, tail_store_handler: h} = m) do
     {data, %Segment{buf: buf, index: begin_index, block_count: bc} = seg} =
       append_entry(seg, entry)
 
-    :ok = Store.append(store, h, data)
+    :ok = append(h, data)
 
     m = %__MODULE__{m | hot: seg, last_index: begin_index + bc - 1}
 
@@ -536,17 +478,15 @@ defmodule ExWal do
   defp cycle(
          %__MODULE__{
            data_path: data_path,
-           store: store,
            tail_store_handler: h,
            lru_cache: lru,
            last_index: last_index,
            hot: %Segment{path: path} = seg,
-           cold: cold,
-           opts: opts
+           cold: cold
          } = m
        ) do
-    :ok = Store.sync(store, h)
-    :ok = Store.close(store, h)
+    :ok = sync(h)
+    :ok = close(h)
     :ok = LRU.put(lru, path, seg)
 
     new_seg = %Segment{
@@ -554,7 +494,7 @@ defmodule ExWal do
       index: last_index + 1
     }
 
-    {:ok, h} = Store.open(store, new_seg.path, opts[:file_permission])
+    {:ok, h} = open(new_seg.path)
 
     size = :array.size(cold)
 
@@ -567,7 +507,7 @@ defmodule ExWal do
     }
   end
 
-  @spec find_segment(index :: index(), t()) :: Segment.t()
+  @spec find_segment(index :: Typespecs.index(), t()) :: Segment.t()
   defp find_segment(index, %__MODULE__{hot: %Segment{index: last_begin_index} = seg} = state) do
     if index >= last_begin_index do
       seg
@@ -576,8 +516,8 @@ defmodule ExWal do
     end
   end
 
-  @spec find_cold_segment(index(), t()) :: Segment.t()
-  defp find_cold_segment(index, %__MODULE__{lru_cache: lru, cold: cold, store: store}) do
+  @spec find_cold_segment(Typespecs.index(), t()) :: Segment.t()
+  defp find_cold_segment(index, %__MODULE__{lru_cache: lru, cold: cold}) do
     lru
     |> LRU.select(fn %Segment{index: x, block_count: bc} ->
       index >= x and index < x + bc
@@ -587,7 +527,7 @@ defmodule ExWal do
         cold
         |> bin_search(index)
         |> :array.get(cold)
-        |> load_segment(store)
+        |> load_segment()
         |> tap(fn %Segment{path: path} = x -> LRU.put(lru, path, x) end)
 
       seg ->
@@ -595,7 +535,7 @@ defmodule ExWal do
     end
   end
 
-  @spec bin_search(:array.array(), index()) :: non_neg_integer() | nil
+  @spec bin_search(:array.array(), Typespecs.index()) :: non_neg_integer() | nil
   defp bin_search(cold, target_index), do: do_search(cold, target_index, 0, :array.size(cold) - 1)
 
   defp do_search(_cold, _target_index, min, max) when min > max, do: nil
@@ -624,13 +564,12 @@ defmodule ExWal do
     end
   end
 
-  @spec __truncate_after(index(), t()) :: t()
+  @spec __truncate_after(Typespecs.index(), t()) :: t()
   defp __truncate_after(
          index,
          %__MODULE__{
            hot: %Segment{index: begin_index, blocks: blocks, buf: buf, path: path} = seg,
            data_path: data_path,
-           store: store,
            tail_store_handler: h
          } = state
        )
@@ -656,14 +595,14 @@ defmodule ExWal do
 
     # truncate file
     temp_file = Path.join(data_path, "tmp")
-    :ok = Store.write_all(store, temp_file, buf)
+    :ok = write_all(temp_file, buf)
 
     # swap the tmp file with the old segment file
-    :ok = Store.close(store, h)
-    :ok = Store.rename(store, temp_file, path)
+    :ok = close(h)
+    :ok = rename(temp_file, path)
 
     # reopen tail handler
-    {:ok, h} = Store.open(store, path, state.opts[:file_permission])
+    {:ok, h} = open(path)
 
     # no need to gc blocks, reset block_count is all we need
     %__MODULE__{
@@ -678,7 +617,6 @@ defmodule ExWal do
          index,
          %__MODULE__{
            cold: cold,
-           store: store,
            data_path: data_path,
            tail_store_handler: h,
            lru_cache: lru,
@@ -692,7 +630,7 @@ defmodule ExWal do
       seg =
       idx
       |> :array.get(cold)
-      |> load_segment(store)
+      |> load_segment()
 
     # truncate buf and blocks
     truncate_idx = index - begin_index + 1
@@ -715,10 +653,10 @@ defmodule ExWal do
 
     # create tmp file to store new buf
     temp_file = Path.join(data_path, "tmp")
-    :ok = Store.write_all(store, temp_file, buf)
+    :ok = write_all(temp_file, buf)
 
     # swap the tmp file with the old segment file
-    :ok = Store.rename(store, temp_file, path)
+    :ok = rename(temp_file, path)
 
     # cleanup
     # all segments and cache after the new segment should be deleted
@@ -727,15 +665,15 @@ defmodule ExWal do
     if idx + 1 < :array.size(cold) do
       Enum.each((idx + 1)..(:array.size(cold) - 1), fn i ->
         %Segment{path: path} = :array.get(i, cold)
-        :ok = Store.rm(store, path)
+        :ok = rm(path)
       end)
     end
 
-    :ok = Store.close(store, h)
-    :ok = Store.rm(store, hot_path)
+    :ok = close(h)
+    :ok = rm(hot_path)
 
     # reopen tail handler
-    {:ok, h} = Store.open(store, path, state.opts[:file_permission])
+    {:ok, h} = open(path)
 
     %__MODULE__{
       state
@@ -746,13 +684,12 @@ defmodule ExWal do
     }
   end
 
-  @spec __truncate_before(index(), t()) :: t()
+  @spec __truncate_before(Typespecs.index(), t()) :: t()
   defp __truncate_before(
          index,
          %__MODULE__{
            hot: %Segment{index: begin_index, blocks: blocks, buf: buf, path: path},
            cold: cold,
-           store: store,
            data_path: data_path,
            tail_store_handler: h,
            lru_cache: lru
@@ -777,12 +714,12 @@ defmodule ExWal do
     # rewrite file
     # make a tmp file to store new buf
     temp_file = Path.join(data_path, "tmp")
-    :ok = Store.write_all(store, temp_file, new_seg.buf)
+    :ok = write_all(temp_file, new_seg.buf)
 
     # swap the tmp file with the old segment file
-    :ok = Store.close(store, h)
-    :ok = Store.rename(store, temp_file, new_seg.path)
-    :ok = Store.rm(store, path)
+    :ok = close(h)
+    :ok = rename(temp_file, new_seg.path)
+    :ok = rm(path)
 
     # delete all segment files after the new segment
     cold_size = :array.size(cold)
@@ -790,27 +727,26 @@ defmodule ExWal do
     if cold_size > 0 do
       # Task.async_stream(0..(cold_size - 1), fn i ->
       #   %Segment{path: path} = :array.get(i, cold)
-      #   :ok = Store.rm(store, path)
+      #   :ok = rm(store, path)
       #   :ok = LRU.delete(lru, path)
       # end)
       # |> Stream.run()
       Enum.each(0..(cold_size - 1), fn i ->
         %Segment{path: path} = :array.get(i, cold)
-        :ok = Store.rm(store, path)
+        :ok = rm(path)
         :ok = LRU.delete(lru, path)
       end)
     end
 
     # reopen tail handler
-    {:ok, h} = Store.open(store, new_seg.path, state.opts[:file_permission])
+    {:ok, h} = open(new_seg.path)
 
     %__MODULE__{state | hot: new_seg, first_index: index, cold: :array.new(), tail_store_handler: h}
   end
 
   defp __truncate_before(
          index,
-         %__MODULE__{hot: %Segment{index: begin_index}, cold: cold, store: store, data_path: data_path, lru_cache: lru} =
-           state
+         %__MODULE__{hot: %Segment{index: begin_index}, cold: cold, data_path: data_path, lru_cache: lru} = state
        )
        when index < begin_index do
     idx = bin_search(cold, index)
@@ -818,7 +754,7 @@ defmodule ExWal do
     %Segment{buf: buf, blocks: blocks, index: begin_index} =
       idx
       |> :array.get(cold)
-      |> load_segment(store)
+      |> load_segment()
 
     %Block{offset: offset} = :array.get(index - begin_index, blocks)
 
@@ -837,16 +773,16 @@ defmodule ExWal do
     # delete all segment files and cache before the new segment
     Enum.each(0..idx, fn i ->
       %Segment{path: path} = :array.get(i, cold)
-      :ok = Store.rm(store, path)
+      :ok = rm(path)
     end)
 
     # rewrite file
     # make a tmp file to store new buf
     temp_file = Path.join(data_path, "tmp")
-    :ok = Store.write_all(store, temp_file, new_seg.buf)
+    :ok = write_all(temp_file, new_seg.buf)
 
     # swap the tmp file with the old segment file
-    :ok = Store.rename(store, temp_file, new_seg.path)
+    :ok = rename(temp_file, new_seg.path)
 
     cold_size = :array.size(cold)
 
@@ -857,35 +793,28 @@ defmodule ExWal do
   end
 
   defp reinit(
-         %__MODULE__{
-           data_path: data_path,
-           lru_cache: lru,
-           hot: %Segment{path: path},
-           store: store,
-           tail_store_handler: h,
-           cold: cold,
-           opts: opts
-         } = state
+         %__MODULE__{data_path: data_path, lru_cache: lru, hot: %Segment{path: path}, tail_store_handler: h, cold: cold} =
+           state
        ) do
     # rm cache
     LRU.clear(lru)
 
     # rm hot
-    :ok = Store.close(store, h)
-    :ok = Store.rm(store, path)
+    :ok = close(h)
+    :ok = rm(path)
 
     # rm cold
     if :array.size(cold) > 0 do
       Enum.each(0..(:array.size(cold) - 1), fn i ->
         %Segment{path: path} = :array.get(i, cold)
-        :ok = Store.rm(store, path)
+        :ok = rm(path)
       end)
     end
 
     # reinit
     seg1_path = Path.join(data_path, segment_filename(1))
 
-    {:ok, h} = Store.open(store, seg1_path, opts[:file_permission])
+    {:ok, h} = open(seg1_path)
 
     %__MODULE__{
       state

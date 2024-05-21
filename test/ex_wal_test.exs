@@ -18,6 +18,7 @@ defmodule ExWalTest do
   end
 
   describe "start_link" do
+    @tag exec: true
     test "start_link with empty path", %{opts: opts} do
       start_supervised!({ExWal, opts})
       assert -1 == ExWal.last_index(opts[:name])
