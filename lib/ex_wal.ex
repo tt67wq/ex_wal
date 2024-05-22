@@ -449,7 +449,9 @@ defmodule ExWal do
   end
 
   @spec write_entries([Entry.t()], t()) :: t()
-  defp write_entries([], %__MODULE__{tail_store_handler: h, opts: opts} = m) do
+  defp write_entries([], m) do
+    %__MODULE__{tail_store_handler: h, opts: opts} = m
+
     unless opts[:nosync] do
       :ok = sync(h)
     end
@@ -457,7 +459,9 @@ defmodule ExWal do
     m
   end
 
-  defp write_entries([entry | t], %__MODULE__{hot: seg, opts: opts, tail_store_handler: h} = m) do
+  defp write_entries([entry | t], m) do
+    %__MODULE__{hot: seg, opts: opts, tail_store_handler: h} = m
+
     {data, %Segment{buf: buf, index: begin_index, block_count: bc} = seg} =
       append_entry(seg, entry)
 
@@ -565,15 +569,13 @@ defmodule ExWal do
   end
 
   @spec __truncate_after(Typespecs.index(), t()) :: t()
-  defp __truncate_after(
-         index,
-         %__MODULE__{
-           hot: %Segment{index: begin_index, blocks: blocks, buf: buf, path: path} = seg,
-           data_path: data_path,
-           tail_store_handler: h
-         } = state
-       )
-       when index >= begin_index do
+  defp __truncate_after(index, %__MODULE__{hot: %Segment{index: begin_index}} = state) when index >= begin_index do
+    %__MODULE__{
+      hot: %Segment{blocks: blocks, buf: buf, path: path} = seg,
+      data_path: data_path,
+      tail_store_handler: h
+    } = state
+
     # truncate buf and blocks
     truncate_idx = index - begin_index + 1
 
@@ -613,16 +615,15 @@ defmodule ExWal do
     }
   end
 
-  defp __truncate_after(
-         index,
-         %__MODULE__{
-           cold: cold,
-           data_path: data_path,
-           tail_store_handler: h,
-           lru_cache: lru,
-           hot: %Segment{path: hot_path}
-         } = state
-       ) do
+  defp __truncate_after(index, state) do
+    %__MODULE__{
+      cold: cold,
+      data_path: data_path,
+      tail_store_handler: h,
+      lru_cache: lru,
+      hot: %Segment{path: hot_path}
+    } = state
+
     # find segment by index
     idx = bin_search(cold, index)
 
@@ -685,17 +686,15 @@ defmodule ExWal do
   end
 
   @spec __truncate_before(Typespecs.index(), t()) :: t()
-  defp __truncate_before(
-         index,
-         %__MODULE__{
-           hot: %Segment{index: begin_index, blocks: blocks, buf: buf, path: path},
-           cold: cold,
-           data_path: data_path,
-           tail_store_handler: h,
-           lru_cache: lru
-         } = state
-       )
-       when index >= begin_index do
+  defp __truncate_before(index, %__MODULE__{hot: %Segment{index: begin_index}} = state) when index >= begin_index do
+    %__MODULE__{
+      hot: %Segment{blocks: blocks, buf: buf, path: path},
+      cold: cold,
+      data_path: data_path,
+      tail_store_handler: h,
+      lru_cache: lru
+    } = state
+
     %Block{offset: offset} = :array.get(index - begin_index, blocks)
 
     new_buf = binary_part(buf, offset, byte_size(buf) - offset)
@@ -744,11 +743,8 @@ defmodule ExWal do
     %__MODULE__{state | hot: new_seg, first_index: index, cold: :array.new(), tail_store_handler: h}
   end
 
-  defp __truncate_before(
-         index,
-         %__MODULE__{hot: %Segment{index: begin_index}, cold: cold, data_path: data_path, lru_cache: lru} = state
-       )
-       when index < begin_index do
+  defp __truncate_before(index, %__MODULE__{hot: %Segment{index: begin_index}} = state) when index < begin_index do
+    %__MODULE__{cold: cold, data_path: data_path, lru_cache: lru} = state
     idx = bin_search(cold, index)
 
     %Segment{buf: buf, blocks: blocks, index: begin_index} =
