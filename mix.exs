@@ -22,7 +22,7 @@ defmodule ExWal.MixProject do
     ]
   end
 
-  defp elixirc_paths(:test), do: ["lib", "test"]
+  defp elixirc_paths(:test), do: ["lib", "test", "test/support"]
   defp elixirc_paths(:dev), do: ["lib", "examples", "benchmarks"]
   defp elixirc_paths(_), do: ["lib"]
 

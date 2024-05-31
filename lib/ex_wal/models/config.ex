@@ -23,11 +23,6 @@ defmodule ExWal.Models.Config do
       type: :integer,
       doc: "The size of the segment cache. Default is 100.",
       default: 2
-    ],
-    name: [
-      type: :atom,
-      doc: "The name of the WAL. Default is `wal`.",
-      default: __MODULE__
     ]
   ]
 

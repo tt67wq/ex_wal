@@ -38,4 +38,12 @@ defmodule ExWal.Store.File do
   def rename(_, source, destionation), do: File.rename(source, destionation)
 
   def rm(_, path), do: File.rm(path)
+
+  def wildcard(_, path) do
+    Path.wildcard(path)
+  end
+
+  def dir?(_, path) do
+    File.dir?(path)
+  end
 end

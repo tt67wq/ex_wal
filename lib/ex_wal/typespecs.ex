@@ -2,7 +2,7 @@ defmodule ExWal.Typespecs do
   @moduledoc """
   Common typespecs for ExWal
   """
-  @type name :: atom() | {:global, term()} | {:via, module(), term()} | term()
+  @type name :: atom() | {:global, term()} | {:via, module(), term()}
   @type opts :: keyword()
   @type on_start ::
           {:ok, pid()}

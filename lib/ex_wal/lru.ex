@@ -4,13 +4,13 @@ defmodule ExWal.LRU do
 
   For using it, you need to start it:
 
-      iex> LRU.start_link(:my_cache, 1000)
+      iex> LRU.start_link({:my_cache, 1000})
 
   Or add it to your supervisor tree, like: `worker(LRU, [:my_cache, 1000])`
 
   ## Using
 
-      iex> LRU.start_link(:my_cache, 1000)
+      iex> LRU.start_link({:my_cache, 1000})
       {:ok, #PID<0.60.0>}
 
       iex> LRU.put(:my_cache, "id", "value")
@@ -33,6 +33,8 @@ defmodule ExWal.LRU do
   First ets table save the key values pairs, the second save order of inserted elements.
   """
 
+  use Agent
+
   # use GenServer
 
   defstruct table: nil, ttl_table: nil, size: 0, evict_fn: nil
@@ -53,8 +55,8 @@ defmodule ExWal.LRU do
       evicted when the cache is full.
 
   """
-  @spec start_link(atom(), non_neg_integer(), Keyword.t()) :: Agent.on_start()
-  def start_link(name, size, opts \\ []) do
+  @spec start_link({atom(), non_neg_integer(), Keyword.t()}) :: Agent.on_start()
+  def start_link({name, size, opts}) do
     Agent.start_link(__MODULE__, :init, [name, size, opts], name: name)
   end
 
