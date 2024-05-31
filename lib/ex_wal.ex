@@ -48,9 +48,9 @@ defmodule ExWal do
 
       ## Examples
 
-          iex> last_index = ExWal.last_index(:wal_name)
+          iex> last_index = last_index(:wal_name)
           iex> enties = last_index..(last_index+10) |> Enum.map(fn i -> Entry.new(i, "some data") end)
-          iex> :ok = ExWal.write(:wal_name, entries)
+          iex> :ok = write(:wal_name, entries)
       """
       @spec write([Entry.t()], non_neg_integer()) :: :ok
       def write(entries, timeout \\ 5000) do
@@ -62,7 +62,7 @@ defmodule ExWal do
 
       ## Examples
 
-          iex> {:ok, data} = ExWal.read(:wal_name, 1)
+          iex> {:ok, data} = read(:wal_name, 1)
       """
       @spec read(Typespecs.index()) :: {:ok, Entry.t()} | {:error, :index_not_found}
       def read(index, timeout \\ 5000) do
@@ -92,7 +92,7 @@ defmodule ExWal do
 
       ## Examples
 
-          iex> MyApp.WAL.truncate_after(:my_wal, 10)
+          iex> truncate_after(:my_wal, 10)
           :ok
 
       ## Parameters
@@ -117,7 +117,7 @@ defmodule ExWal do
 
       ## Examples
 
-          iex> MyApp.WAL.truncate_before(:my_wal, 10)
+          iex> truncate_before(:my_wal, 10)
           :ok
 
       ## Parameters
@@ -142,7 +142,7 @@ defmodule ExWal do
 
       ## Examples
 
-          iex> MyApp.WAL.clear(:my_wal)
+          iex> clear(:my_wal)
           :ok
 
       ## Parameters

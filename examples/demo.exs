@@ -35,7 +35,7 @@ Logger.info("latest: #{latest}")
 
 # read
 {:ok, ret} = SampleApp.read(latest - 10)
-Logger.info("idx: #{latest - 10}, content: #{ret}")
+Logger.info("idx: #{latest - 10}, content: #{inspect(ret)}")
 
 # truncate before
 :ok = SampleApp.truncate_before(latest - 100)
