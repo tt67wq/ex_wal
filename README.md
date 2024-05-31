@@ -15,7 +15,7 @@ The package can be installed by adding `ex_wal` to your list of dependencies in 
 ```elixir
 def deps do
   [
-    {:ex_wal, "~> 0.1"}
+    {:ex_wal, "~> 0.2"}
   ]
 end
 ```
@@ -32,47 +32,61 @@ This project has designed the storage part as a behavior (`ExWal.Store`), defini
 
 ## Usage
 
+1. Prepare a instance
+```Elixir
+defmodule MyApp do
+  use ExWal, otp_app: :my_app
+end
+```
+
+2. Config this instance
+```Elixir
+config :my_app, MyApp,
+  path: "/tmp/wal_test",
+  nosync: false,
+  # 4k per segment
+  segment_size: 4 * 1024,
+  # cache max 5 segments
+  segment_cache_size: 5
+```
+
+3. Add it to supervised tree
 ```elixir
 Supervisor.start_link(
   [
-    {ExWal,
-     [
-       name: :wal_test,
-       path: "/tmp/wal_test",
-       nosync: false,
-       # 4k per segment
-       segment_size: 4 * 1024,
-       # cache max 5 segments
-       segment_cache_size: 5
-     ]}
+    MyApp
   ],
   strategy: :one_for_one
 )
+```
 
-latest = ExWal.last_index(:wal_test)
+4. Enjoy your journey
+
+```Elixir
+latest = MyApp.last_index()
 Logger.info("latest: #{latest}")
 
 # write 10k entries
 entries =
   Enum.map((latest + 1)..(latest + 10_000), fn i -> Entry.new(i, "Hello Elixir #{i}") end)
 
-:ok = ExWal.write(:wal_test, entries)
+:ok = MyApp.write(entries)
 
-latest = ExWal.last_index(:wal_test)
+latest = MyApp.last_index()
 Logger.info("latest: #{latest}") # should be latest + 10_000
 
 # read
-{:ok, ret} = ExWal.read(:wal_test, latest - 10)
+{:ok, ret} = MyApp.read(latest - 10)
 Logger.info("idx: #{latest - 10}, content: #{ret}")
 
 # truncate before
-:ok = ExWal.truncate_before(:wal_test, latest - 100)
-first = ExWal.first_index(:wal_test)
+:ok = MyApp.truncate_before(latest - 100)
+first = MyApp.first_index()
 Logger.info("first: #{first}") # should be latest - 100
 
 # truncate after
-:ok = ExWal.truncate_after(:wal_test, latest - 5)
-latest = ExWal.last_index(:wal_test)
+:ok = MyApp.truncate_after(latest - 5)
+latest = MyApp.last_index()
 Logger.info("latest: #{latest}") # should be latest - 5
 ```
 
