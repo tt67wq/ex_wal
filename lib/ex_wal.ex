@@ -48,9 +48,9 @@ defmodule ExWal do
 
       ## Examples
 
-          iex> last_index = ExWal.last_index(:wal_name)
+          iex> last_index = last_index(:wal_name)
           iex> enties = last_index..(last_index+10) |> Enum.map(fn i -> Entry.new(i, "some data") end)
-          iex> :ok = ExWal.write(:wal_name, entries)
+          iex> :ok = write(:wal_name, entries)
       """
       @spec write([Entry.t()], non_neg_integer()) :: :ok
       def write(entries, timeout \\ 5000) do
@@ -62,7 +62,7 @@ defmodule ExWal do
 
       ## Examples
 
-          iex> {:ok, data} = ExWal.read(:wal_name, 1)
+          iex> {:ok, data} = read(:wal_name, 1)
       """
       @spec read(Typespecs.index()) :: {:ok, Entry.t()} | {:error, :index_not_found}
       def read(index, timeout \\ 5000) do
@@ -92,12 +92,11 @@ defmodule ExWal do
 
       ## Examples
 
-          iex> MyApp.WAL.truncate_after(:my_wal, 10)
+          iex> truncate_after(:my_wal, 10)
           :ok
 
       ## Parameters
 
-        * `name_or_pid` - The name or process identifier of the WAL GenServer.
         * `index` - The index after which to truncate the WAL.
         * `timeout` (optional) - The timeout value in milliseconds (default: 5000).
 
@@ -117,12 +116,11 @@ defmodule ExWal do
 
       ## Examples
 
-          iex> MyApp.WAL.truncate_before(:my_wal, 10)
+          iex> truncate_before(:my_wal, 10)
           :ok
 
       ## Parameters
 
-        * `name_or_pid` - The name or process identifier of the WAL GenServer.
         * `index` - The index before which to truncate the WAL.
         * `timeout` (optional) - The timeout value in milliseconds (default: 5000).
 
@@ -138,16 +136,32 @@ defmodule ExWal do
       end
 
       @doc """
+
+      Synchronize the write-ahead log (WAL) to disk.
+
+      ## Examples
+
+          iex> sync(:my_wal)
+          :ok
+
+      ## Returns
+
+      - `:ok` - If the synchronization is successful.
+      - `{:error, any()}` - If the synchronization fails.
+
+      """
+      @spec sync() :: :ok | {:error, any()}
+      def sync do
+        delegate(:sync, [])
+      end
+
+      @doc """
       Clears the write-ahead log (WAL) by removing all entries.
 
       ## Examples
 
-          iex> MyApp.WAL.clear(:my_wal)
+          iex> clear(:my_wal)
           :ok
-
-      ## Parameters
-
-        * `name_or_pid` - The name or process identifier of the WAL GenServer.
 
       ## Returns
 
