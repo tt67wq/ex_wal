@@ -31,9 +31,7 @@ defmodule ExWal do
             tail_store_handler: nil,
             opts: [
               nosync: false,
-              segment_size: 64 * 1024 * 1024,
-              dir_permission: 0o750,
-              file_permission: 0o640
+              segment_size: 64 * 1024 * 1024
             ]
 
   @type t :: %__MODULE__{
@@ -47,8 +45,6 @@ defmodule ExWal do
           opts: [
             nosync: boolean(),
             segment_size: non_neg_integer(),
-            dir_permission: non_neg_integer(),
-            file_permission: non_neg_integer()
           ]
         }
 
