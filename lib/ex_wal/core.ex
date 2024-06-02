@@ -65,12 +65,10 @@ defmodule ExWal.Core do
     GenServer.stop(name_or_pid)
   end
 
-
   @spec write(Typespecs.name(), [Entry.t()], non_neg_integer()) :: :ok
   def write(name_or_pid, entries, timeout \\ 5000) do
     GenServer.call(name_or_pid, {:write, entries}, timeout)
   end
-
 
   @spec read(Typespecs.name(), Typespecs.index()) :: {:ok, Entry.t()} | {:error, :index_not_found}
   def read(name_or_pid, index, timeout \\ 5000) do
@@ -92,18 +90,20 @@ defmodule ExWal.Core do
     GenServer.call(name_or_pid, :segment_count)
   end
 
-
   @spec truncate_after(Typespecs.name(), Typespecs.index(), non_neg_integer()) :: :ok | {:error, :index_out_of_range}
   def truncate_after(name_or_pid, index, timeout \\ 5000) do
     GenServer.call(name_or_pid, {:truncate_after, index}, timeout)
   end
-
 
   @spec truncate_before(Typespecs.name(), Typespecs.index(), non_neg_integer()) :: :ok | {:error, :index_out_of_range}
   def truncate_before(name_or_pid, index, timeout \\ 5000) do
     GenServer.call(name_or_pid, {:truncate_before, index}, timeout)
   end
 
+  @spec sync(Typespecs.name()) :: :ok
+  def sync(name_or_pid) do
+    GenServer.call(name_or_pid, :sync)
+  end
 
   @spec clear(Typespecs.name()) :: :ok
   def clear(name_or_pid) do
@@ -277,6 +277,11 @@ defmodule ExWal.Core do
 
   def handle_call({:truncate_before, index}, _from, state) do
     {:reply, :ok, __truncate_before(index, state)}
+  end
+
+  def handle_call(:sync, _, state) do
+    %__MODULE__{tail_store_handler: h, store_name: store_name} = state
+    {:reply, Store.sync({@store_impl, store_name}, h), state}
   end
 
   @impl GenServer

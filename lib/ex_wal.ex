@@ -97,7 +97,6 @@ defmodule ExWal do
 
       ## Parameters
 
-        * `name_or_pid` - The name or process identifier of the WAL GenServer.
         * `index` - The index after which to truncate the WAL.
         * `timeout` (optional) - The timeout value in milliseconds (default: 5000).
 
@@ -122,7 +121,6 @@ defmodule ExWal do
 
       ## Parameters
 
-        * `name_or_pid` - The name or process identifier of the WAL GenServer.
         * `index` - The index before which to truncate the WAL.
         * `timeout` (optional) - The timeout value in milliseconds (default: 5000).
 
@@ -138,16 +136,32 @@ defmodule ExWal do
       end
 
       @doc """
+
+      Synchronize the write-ahead log (WAL) to disk.
+
+      ## Examples
+
+          iex> sync(:my_wal)
+          :ok
+
+      ## Returns
+
+      - `:ok` - If the synchronization is successful.
+      - `{:error, any()}` - If the synchronization fails.
+
+      """
+      @spec sync() :: :ok | {:error, any()}
+      def sync do
+        delegate(:sync, [])
+      end
+
+      @doc """
       Clears the write-ahead log (WAL) by removing all entries.
 
       ## Examples
 
           iex> clear(:my_wal)
           :ok
-
-      ## Parameters
-
-        * `name_or_pid` - The name or process identifier of the WAL GenServer.
 
       ## Returns
 
