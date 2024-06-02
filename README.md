@@ -88,6 +88,12 @@ Logger.info("first: #{first}") # should be latest - 100
 :ok = MyApp.truncate_after(latest - 5)
 latest = MyApp.last_index()
 Logger.info("latest: #{latest}") # should be latest - 5
+
+# reinit wal
+:ok = MyApp.reinit()
+
+# clear all wal data
+:ok = MyApp.clear()
 ```
 
 
