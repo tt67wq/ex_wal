@@ -43,6 +43,18 @@ defmodule ExWal do
       defp delegate(method, args), do: apply(Core, method, [__MODULE__ | args])
 
       @doc """
+      Stop WAL.
+
+      ## Examples
+
+          iex> :ok = stop()
+      """
+      @spec stop() :: :ok
+      def stop() do
+        delegate(:stop, [])
+      end
+
+      @doc """
       Write entries to WAL, the entries must be strictly consecutive and incremental,
       and the index of the first entry must be WAL's last_index + 1.
 

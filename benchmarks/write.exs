@@ -13,7 +13,7 @@ small = "small value"
 {:ok, ten_mb} = File.read("benchmarks/data/10m")
 
 small_segment_size = 16 * 1024 * 1024
-big_segment_size = 128 * 1024 * 1024
+big_segment_size = 256 * 1024 * 1024
 huge_segment_size = 1024 * 1024 * 1024
 
 defmodule BenchmarkApp do
@@ -29,8 +29,8 @@ Benchee.run(
   },
   inputs: %{
     "small value, nosync" => {small, [path: data_dir, nosync: true, segment_size: small_segment_size]},
-    "small value" => {small, [path: data_dir, segment_size: small_segment_size]},
-    "1KB value" => {one_kb, [path: data_dir, segment_size: small_segment_size]},
+    "small value" => {small, [path: data_dir, segment_size: big_segment_size]},
+    "1KB value" => {one_kb, [path: data_dir, segment_size: big_segment_size]},
     "1MB value" => {one_mb, [path: data_dir, segment_size: big_segment_size]},
     "10MB value" => {ten_mb, [path: data_dir, segment_size: huge_segment_size]}
   },
@@ -45,7 +45,7 @@ Benchee.run(
   end,
   after_scenario: fn _ ->
     IO.puts("#{BenchmarkApp.last_index()} entries written to WAL.")
-    BenchmarkApp.clear()
+    BenchmarkApp.stop()
     cleanup.()
   end
 )

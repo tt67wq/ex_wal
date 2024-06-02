@@ -12,7 +12,10 @@ defmodule ProfileApp do
   use ExWal, otp_app: :profile
 end
 
-Application.put_env(:profile, ProfileApp, path: "/tmp/exwal_profile")
+segment_size = 128 * 1024 * 1024
+config = [path: "/tmp/exwal_profile", segment_size: segment_size]
+
+Application.put_env(:profile, ProfileApp, config)
 
 Supervisor.start_link(
   [
@@ -26,11 +29,10 @@ data = "Anytime you apply a rule too universally, it turns into an anti-pattern"
 
 :eprof.start_profiling([self()])
 
-# write 10k entries 100 times
-Enum.each(1..100, fn _ ->
+Enum.each(1..1000, fn _ ->
   latest = ProfileApp.last_index()
   Logger.info("latest: #{latest}")
-  entries = Enum.map((latest + 1)..(latest + 10_000), fn i -> Entry.new(i, data) end)
+  entries = Enum.map((latest + 1)..(latest + 3000), fn i -> Entry.new(i, data) end)
 
   :ok = ProfileApp.write(entries)
 
@@ -38,7 +40,7 @@ Enum.each(1..100, fn _ ->
   Logger.info("latest: #{latest}")
 end)
 
-:ok = ProfileApp.clear()
+# :ok = ProfileApp.clear()
 
 Supervisor.stop(:demo)
 

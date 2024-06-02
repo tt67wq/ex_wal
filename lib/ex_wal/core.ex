@@ -290,8 +290,8 @@ defmodule ExWal.Core do
   end
 
   def handle_call(:clear, _, state) do
-    state = do_clear(state)
-    {:reply, :ok, state}
+    do_clear(state)
+    {:stop, :normal, :ok, state}
   end
 
   def handle_call(:reinit, _, state) do
