@@ -170,6 +170,22 @@ defmodule ExWal do
       """
       @spec clear() :: :ok
       def clear, do: delegate(:clear, [])
+
+      @doc """
+      Reinit the write-ahead log (WAL)
+
+      ## Examples
+
+          iex> reinit(:my_wal)
+          :ok
+
+      ## Returns
+
+      - `:ok` - If the clearing is successful.
+
+      """
+      @spec reinit() :: :ok
+      def reinit, do: delegate(:reinit, [])
     end
   end
 end

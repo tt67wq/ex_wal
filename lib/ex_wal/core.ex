@@ -105,9 +105,14 @@ defmodule ExWal.Core do
     GenServer.call(name_or_pid, :sync)
   end
 
+  @spec reinit(Typespecs.name()) :: :ok
+  def reinit(name_or_pid) do
+    GenServer.call(name_or_pid, :reinit)
+  end
+
   @spec clear(Typespecs.name()) :: :ok
   def clear(name_or_pid) do
-    GenServer.cast(name_or_pid, :clear)
+    GenServer.call(name_or_pid, :clear)
   end
 
   # ----------------- Server  -----------------
@@ -247,7 +252,7 @@ defmodule ExWal.Core do
     {:reply, {:ok, Entry.new(index, data, cache)}, state}
   end
 
-  def handle_call({:truncate_after, -1}, _from, state), do: {:reply, :ok, reinit(state)}
+  def handle_call({:truncate_after, -1}, _from, state), do: {:reply, :ok, do_reinit(state)}
 
   def handle_call({:truncate_after, index}, _from, %__MODULE__{first_index: first_index, last_index: last_index} = state)
       when index < first_index or index > last_index do
@@ -284,9 +289,14 @@ defmodule ExWal.Core do
     {:reply, Store.sync({@store_impl, store_name}, h), state}
   end
 
-  @impl GenServer
-  def handle_cast(:clear, state) do
-    {:noreply, reinit(state)}
+  def handle_call(:clear, _, state) do
+    state = do_clear(state)
+    {:reply, :ok, state}
+  end
+
+  def handle_call(:reinit, _, state) do
+    state = do_reinit(state)
+    {:reply, :ok, state}
   end
 
   # ----------------- Private -----------------
@@ -713,7 +723,7 @@ defmodule ExWal.Core do
     %__MODULE__{state | first_index: index, cold: new_cold}
   end
 
-  defp reinit(
+  defp do_reinit(
          %__MODULE__{
            store_name: store_name,
            data_path: data_path,
@@ -753,6 +763,33 @@ defmodule ExWal.Core do
         last_index: -1,
         tail_store_handler: h
     }
+  end
+
+  defp do_clear(%__MODULE__{
+         store_name: store_name,
+         lru_cache: lru,
+         hot: %Segment{path: path},
+         tail_store_handler: h,
+         cold: cold
+       }) do
+    # rm cache
+    LRU.clear(lru)
+
+    # rm hot
+    with do
+      :ok = Store.close({@store_impl, store_name}, h)
+      :ok = Store.rm({@store_impl, store_name}, path)
+    end
+
+    # rm cold
+    if :array.size(cold) > 0 do
+      Enum.each(0..(:array.size(cold) - 1), fn i ->
+        %Segment{path: path} = :array.get(i, cold)
+        :ok = Store.rm({@store_impl, store_name}, path)
+      end)
+    end
+
+    :ok
   end
 
   @spec array_slice(:array.array(), Range.t()) :: :array.array()

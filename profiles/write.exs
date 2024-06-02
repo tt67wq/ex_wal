@@ -38,7 +38,7 @@ Enum.each(1..100, fn _ ->
   Logger.info("latest: #{latest}")
 end)
 
-# ProfileApp.clear()
+:ok = ProfileApp.clear()
 
 Supervisor.stop(:demo)
 
