@@ -13,7 +13,7 @@ defmodule ExWal do
       alias ExWal.Typespecs
 
       @type ok_t(ret) :: {:ok, ret}
-      @type err_t() :: {:error, ExWechatpay.Exception.t()}
+      @type err_t() :: {:error, term()}
 
       def init(config) do
         {:ok, config}
