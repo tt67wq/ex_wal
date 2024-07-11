@@ -10,7 +10,6 @@ defmodule ExWal.Typespecs do
           | {:error, {:already_started, pid()} | term()}
 
   @type dict :: %{binary() => any()}
-  @type handler :: pid() | :file.fd()
   @type index :: integer()
   @type permision :: non_neg_integer()
 end

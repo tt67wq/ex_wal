@@ -1,6 +1,19 @@
 .PHONY: build deps.get deps.upgrade compile lint test repl
 
-all: build
+all: help
+
+help:
+	@echo "Usage: make <target>"
+	@echo "Targets:"
+	@echo "  build - Build the project"
+	@echo "  deps.get - Install dependencies"
+	@echo "  deps.upgrade - Upgrade dependencies"
+	@echo "  compile - Compile the project"
+	@echo "  lint - Lint the code"
+	@echo "  test - Run tests"
+	@echo "  repl - Start an interactive Elixir shell"
+	@echo "  upload - Publish the project to Hex"
+	@echo "  clean - Clean the project"
 
 ########### Elixir #########
 # 构建项目
@@ -13,6 +26,11 @@ deps.get:
 deps.upgrade:
 	@mix deps.update --all
 	@echo "Dependencies updated."
+
+deps.purge:
+	@rm -rf deps
+	@rm -rf _build
+	@echo "Dependencies purged."
 
 compile:
 	@mix compile

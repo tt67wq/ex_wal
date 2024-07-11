@@ -13,7 +13,7 @@ defmodule ExWal.Supervisor do
     children =
       [
         {ExWal.LRU, {lru_name(name), 1024, []}},
-        {ExWal.Core, {config, lru_name(name), store_name(name), name}}
+        {ExWal.Core, {config, lru_name(name), name}}
       ]
 
     Supervisor.init(children, strategy: :one_for_one)
@@ -25,9 +25,5 @@ defmodule ExWal.Supervisor do
 
   defp lru_name(name) do
     Module.concat(name, LRU)
-  end
-
-  defp store_name(name) do
-    Module.concat(name, Store)
   end
 end
