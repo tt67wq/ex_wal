@@ -181,7 +181,7 @@ defmodule ExWalTest do
 
         assert App.segment_count() == Enum.count(files)
 
-        App.clear()
+        App.reinit()
       end)
     end
   end
@@ -209,6 +209,7 @@ defmodule ExWalTest do
       assert -1 == App.last_index()
     end
 
+    @tag exec: true
     test "chaos" do
       start_supervised!(App)
 
@@ -249,7 +250,7 @@ defmodule ExWalTest do
 
         assert App.segment_count() == Enum.count(files)
 
-        App.clear()
+        App.reinit()
       end)
     end
   end

@@ -184,7 +184,9 @@ defmodule ExWal.Core do
   end
 
   @impl GenServer
-  def terminate(_reason, %__MODULE__{tail_store_handler: h}) do
+  def terminate(reason, %__MODULE__{tail_store_handler: h}) do
+    Logger.warning("ex_wal terminate: #{inspect(reason)}")
+
     StoreHandler.sync(h)
     StoreHandler.close(h)
   end

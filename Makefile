@@ -14,6 +14,7 @@ help:
 	@echo "  repl - Start an interactive Elixir shell"
 	@echo "  upload - Publish the project to Hex"
 	@echo "  clean - Clean the project"
+	@echo "  benchmark - Run benchmarks"
 
 ########### Elixir #########
 # 构建项目
@@ -57,3 +58,8 @@ repl:
 
 upload:
 	@mix hex.publish
+
+
+benchmark:
+	@mix run benchmarks/write.exs
+	@mix run benchmarks/write_batch.exs
