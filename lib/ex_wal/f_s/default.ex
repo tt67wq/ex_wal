@@ -7,7 +7,7 @@ defmodule ExWal.FS.Default do
 end
 
 defimpl ExWal.FS, for: ExWal.FS.Default do
-  @spec create(impl :: ExWal.FS.t(), name :: String.t()) :: {:ok, file :: File.io_device()} | {:error, reason :: term}
+  @spec create(impl :: ExWal.FS.t(), name :: String.t()) :: {:ok, file :: ExWal.File.t()} | {:error, reason :: term}
   def create(_, name) do
     name
     |> File.exists?()
@@ -17,7 +17,7 @@ defimpl ExWal.FS, for: ExWal.FS.Default do
 
     with {:ok, f} <- File.open(name, [:write, :binary, :raw, :exclusive, {:read_ahead, 4096}]),
          :ok <- File.chmod(name, 0o666) do
-      {:ok, f}
+      {:ok, %ExWal.File.Unix{fd: f}}
     end
   end
 
@@ -33,11 +33,11 @@ defimpl ExWal.FS, for: ExWal.FS.Default do
   end
 
   @spec open_read_write(impl :: ExWal.FS.t(), name :: String.t()) ::
-          {:ok, file :: File.io_device()} | {:error, reason :: term}
+          {:ok, file :: ExWal.File.t()} | {:error, reason :: term}
   def open_read_write(_, name) do
     with {:ok, f} <- File.open(name, [:write, :binary, :raw, {:read_ahead, 4096}]),
          :ok <- File.chmod(name, 0o666) do
-      {:ok, f}
+      {:ok, %ExWal.File.Unix{fd: f}}
     end
   end
 
@@ -57,12 +57,12 @@ defimpl ExWal.FS, for: ExWal.FS.Default do
   end
 
   @spec reuse_for_write(impl :: ExWal.FS.t(), old_name :: String.t(), new_name :: String.t()) ::
-          {:ok, file :: File.io_device()} | {:error, reason :: term}
+          {:ok, file :: ExWal.File.t()} | {:error, reason :: term}
   def reuse_for_write(_, old_name, new_name) do
     with :ok <- File.rename(old_name, new_name),
          {:ok, f} <- File.open(new_name, [:write, :binary, :raw, {:read_ahead, 4096}]),
          :ok <- File.chmod(new_name, 0o666) do
-      {:ok, f}
+      {:ok, %ExWal.File.Unix{fd: f}}
     end
   end
 

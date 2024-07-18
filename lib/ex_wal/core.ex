@@ -3,14 +3,12 @@ defmodule ExWal.Core do
 
   use GenServer
 
+  alias ExWal.FS
   alias ExWal.LRU
   alias ExWal.Models.Block
   alias ExWal.Models.Config
   alias ExWal.Models.Entry
   alias ExWal.Models.Segment
-  alias ExWal.Store
-  alias ExWal.StoreHandler
-  alias ExWal.StoreManager
   alias ExWal.Typespecs
   alias ExWal.Uvarint
 
@@ -22,7 +20,7 @@ defmodule ExWal.Core do
             first_index: -1,
             last_index: -1,
             lru_cache: nil,
-            tail_store_handler: nil,
+            tail_file: nil,
             opts: [
               nosync: false,
               segment_size: 64 * 1024 * 1024
@@ -35,14 +33,16 @@ defmodule ExWal.Core do
           first_index: integer(),
           last_index: integer(),
           lru_cache: Typespecs.name(),
-          tail_store_handler: StoreHandler.t(),
+          tail_file: ExWal.File.t(),
           opts: [
             nosync: boolean(),
             segment_size: non_neg_integer()
           ]
         }
 
-  @manager_impl %ExWal.StoreManager.File{}
+  @fs_impl %FS.Default{}
+  @segment_file_prefix "wal_"
+  @segment_file_suffix ".seg"
 
   @doc """
   Start a WAL process
@@ -120,16 +120,22 @@ defmodule ExWal.Core do
   @impl GenServer
   def init({config, lru_name, _}) do
     path = Path.absname(config[:path])
-    StoreManager.mkdir(@manager_impl, path)
+
+    @fs_impl
+    |> FS.lock(path)
+    |> unless do
+      Logger.error("Failed to lock #{path}")
+      {:stop, :failed_to_lock}
+    end
+
+    FS.mkdir_all(@fs_impl, path)
+
+    {:ok, files} = FS.list(@fs_impl, path)
 
     segments =
-      path
-      |> Path.join("*")
-      |> then(fn x -> StoreManager.wildcard(@manager_impl, x) end)
-      |> Enum.reject(fn x -> StoreManager.dir?(@manager_impl, x) end)
-      |> Enum.map(&Path.basename(&1))
+      files
+      |> Enum.filter(fn x -> segment_file?(x) end)
       |> Enum.sort(:desc)
-      |> Enum.reject(&(String.length(&1) < 20))
       |> Enum.map(fn x ->
         %Segment{
           path: Path.join(path, x),
@@ -139,11 +145,7 @@ defmodule ExWal.Core do
 
     if Enum.empty?(segments) do
       seg1_path = Path.join(path, segment_filename(1))
-
-      {:ok, h} =
-        @manager_impl
-        |> StoreManager.new_store(seg1_path)
-        |> Store.open()
+      {:ok, h} = FS.create(@fs_impl, seg1_path)
 
       {:ok,
        %__MODULE__{
@@ -153,7 +155,7 @@ defmodule ExWal.Core do
          first_index: -1,
          last_index: -1,
          lru_cache: lru_name,
-         tail_store_handler: h,
+         tail_file: h,
          opts: [
            nosync: config[:nosync],
            segment_size: config[:segment_size]
@@ -164,7 +166,7 @@ defmodule ExWal.Core do
       %Segment{index: first_index} = List.last(segments)
 
       [%Segment{path: spath, index: begin_index, block_count: bc} = seg | t] = segments
-      {:ok, h} = @manager_impl |> StoreManager.new_store(spath) |> Store.open()
+      {:ok, h} = FS.open_read_write(@fs_impl, spath)
 
       {:ok,
        %__MODULE__{
@@ -174,7 +176,7 @@ defmodule ExWal.Core do
          first_index: first_index,
          last_index: begin_index + bc - 1,
          lru_cache: lru_name,
-         tail_store_handler: h,
+         tail_file: h,
          opts: [
            nosync: config[:nosync],
            segment_size: config[:segment_size]
@@ -184,11 +186,11 @@ defmodule ExWal.Core do
   end
 
   @impl GenServer
-  def terminate(reason, %__MODULE__{tail_store_handler: h}) do
+  def terminate(reason, %__MODULE__{tail_file: h}) do
     Logger.warning("ex_wal terminate: #{inspect(reason)}")
 
-    StoreHandler.sync(h)
-    StoreHandler.close(h)
+    ExWal.File.sync(h)
+    ExWal.File.close(h)
   end
 
   @impl GenServer
@@ -289,8 +291,8 @@ defmodule ExWal.Core do
   end
 
   def handle_call(:sync, _, state) do
-    %__MODULE__{tail_store_handler: h} = state
-    {:reply, StoreHandler.sync(h), state}
+    %__MODULE__{tail_file: h} = state
+    {:reply, ExWal.File.sync(h), state}
   end
 
   def handle_call(:clear, _, state) do
@@ -306,8 +308,8 @@ defmodule ExWal.Core do
   # ----------------- Private -----------------
 
   # @spec load_segment(Segment.t()) :: Segment.t()
-  defp load_segment(%Segment{path: path} = seg, %__MODULE__{}) do
-    {:ok, content} = @manager_impl |> StoreManager.new_store(path) |> Store.read_all()
+  defp load_segment(%Segment{path: path} = seg, %__MODULE__{opts: opts}) do
+    {:ok, content} = read_content(path, opts[:segment_size])
     {bc, blocks} = parse_blocks(content, 0, 0, [])
 
     %Segment{
@@ -319,18 +321,29 @@ defmodule ExWal.Core do
     }
   end
 
+  defp segment_file?(filename) do
+    String.starts_with?(filename, @segment_file_prefix) and String.ends_with?(filename, @segment_file_suffix)
+  end
+
   @spec parse_segment_filename(String.t()) :: Typespecs.index()
   defp parse_segment_filename(filename) do
+    since = String.length(@segment_file_prefix) + 1
+    before = String.length(filename) - String.length(@segment_file_suffix)
+
     filename
+    |> String.slice(since, before)
     |> String.trim_leading("0")
     |> String.to_integer()
   end
 
   @spec segment_filename(Typespecs.index()) :: String.t()
   defp segment_filename(index) do
-    index
-    |> Integer.to_string()
-    |> String.pad_leading(20, "0")
+    t =
+      index
+      |> Integer.to_string()
+      |> String.pad_leading(20, "0")
+
+    @segment_file_prefix <> t <> @segment_file_suffix
   end
 
   @spec parse_blocks(
@@ -380,22 +393,22 @@ defmodule ExWal.Core do
 
   @spec write_entries([Entry.t()], t()) :: t()
   defp write_entries([], state) do
-    %__MODULE__{tail_store_handler: h, opts: opts} = state
+    %__MODULE__{tail_file: h, opts: opts} = state
 
     unless opts[:nosync] do
-      :ok = StoreHandler.sync(h)
+      ExWal.File.sync(h)
     end
 
     state
   end
 
   defp write_entries([entry | t], state) do
-    %__MODULE__{hot: seg, opts: opts, tail_store_handler: h} = state
+    %__MODULE__{hot: seg, opts: opts, tail_file: h} = state
 
     {data, %Segment{buf: buf, index: begin_index, block_count: bc} = seg} =
       append_entry(seg, entry)
 
-    :ok = StoreHandler.append(h, data)
+    :ok = ExWal.File.write(h, data)
 
     state = %__MODULE__{state | hot: seg, last_index: begin_index + bc - 1}
 
@@ -412,15 +425,15 @@ defmodule ExWal.Core do
   defp cycle(
          %__MODULE__{
            data_path: data_path,
-           tail_store_handler: h,
+           tail_file: h,
            lru_cache: lru,
            last_index: last_index,
            hot: %Segment{path: path} = seg,
            cold: cold
          } = m
        ) do
-    :ok = StoreHandler.sync(h)
-    :ok = StoreHandler.close(h)
+    :ok = ExWal.File.sync(h)
+    :ok = ExWal.File.close(h)
 
     :ok = LRU.put(lru, path, seg)
 
@@ -429,12 +442,12 @@ defmodule ExWal.Core do
       index: last_index + 1
     }
 
-    {:ok, h} = @manager_impl |> StoreManager.new_store(new_seg.path) |> Store.open()
+    {:ok, h} = FS.create(@fs_impl, new_seg.path)
     size = :array.size(cold)
 
     %__MODULE__{
       m
-      | tail_store_handler: h,
+      | tail_file: h,
         hot: new_seg,
         cold: :array.set(size, %Segment{seg | blocks: nil, caches: nil, buf: ""}, cold),
         last_index: last_index
@@ -503,7 +516,7 @@ defmodule ExWal.Core do
     %__MODULE__{
       hot: %Segment{blocks: blocks, buf: buf, path: path} = seg,
       data_path: data_path,
-      tail_store_handler: h
+      tail_file: h
     } = state
 
     # truncate buf and blocks
@@ -527,21 +540,21 @@ defmodule ExWal.Core do
 
     # truncate file
     temp_file = Path.join(data_path, "tmp")
-    :ok = @manager_impl |> StoreManager.new_store(temp_file) |> Store.write_all(buf)
+    :ok = write_content(temp_file, buf)
 
     # swap the tmp file with the old segment file
-    :ok = StoreHandler.close(h)
-    :ok = StoreManager.rename(@manager_impl, temp_file, path)
+    :ok = ExWal.File.close(h)
+    :ok = FS.rename(@fs_impl, temp_file, path)
 
     # reopen tail handler
-    {:ok, h} = @manager_impl |> StoreManager.new_store(path) |> Store.open()
+    {:ok, h} = FS.open_read_write(@fs_impl, path)
 
     # no need to gc blocks, reset block_count is all we need
     %__MODULE__{
       state
       | hot: new_seg,
         last_index: index,
-        tail_store_handler: h
+        tail_file: h
     }
   end
 
@@ -549,7 +562,7 @@ defmodule ExWal.Core do
     %__MODULE__{
       cold: cold,
       data_path: data_path,
-      tail_store_handler: h,
+      tail_file: h,
       lru_cache: lru,
       hot: %Segment{path: hot_path}
     } = state
@@ -584,10 +597,10 @@ defmodule ExWal.Core do
 
     # create tmp file to store new buf
     temp_file = Path.join(data_path, "tmp")
-    :ok = @manager_impl |> StoreManager.new_store(temp_file) |> Store.write_all(buf)
+    :ok = write_content(temp_file, buf)
 
     # swap the tmp file with the old segment file
-    :ok = StoreManager.rename(@manager_impl, temp_file, path)
+    :ok = FS.rename(@fs_impl, temp_file, hot_path)
 
     # cleanup
     # all segments and cache after the new segment should be deleted
@@ -596,21 +609,21 @@ defmodule ExWal.Core do
     if idx + 1 < :array.size(cold) do
       Enum.each((idx + 1)..(:array.size(cold) - 1), fn i ->
         %Segment{path: path} = :array.get(i, cold)
-        :ok = StoreManager.rm(@manager_impl, path)
+        :ok = FS.remove(@fs_impl, path)
       end)
     end
 
-    :ok = StoreHandler.close(h)
-    :ok = StoreManager.rm(@manager_impl, hot_path)
+    :ok = ExWal.File.close(h)
+    :ok = FS.remove(@fs_impl, hot_path)
 
     # reopen tail handler
-    {:ok, h} = @manager_impl |> StoreManager.new_store(path) |> Store.open()
+    {:ok, h} = FS.open_read_write(@fs_impl, path)
 
     %__MODULE__{
       state
       | hot: new_seg,
         cold: :array.resize(idx, cold),
-        tail_store_handler: h,
+        tail_file: h,
         last_index: index
     }
   end
@@ -621,7 +634,7 @@ defmodule ExWal.Core do
       hot: %Segment{blocks: blocks, buf: buf, path: path},
       cold: cold,
       data_path: data_path,
-      tail_store_handler: h,
+      tail_file: h,
       lru_cache: lru
     } = state
 
@@ -645,14 +658,14 @@ defmodule ExWal.Core do
     with do
       # rewrite file
       # make a tmp file to store new buf
-      :ok = @manager_impl |> StoreManager.new_store(temp_file) |> Store.write_all(new_seg.buf)
+      :ok = write_content(temp_file, new_buf)
     end
 
     # swap the tmp file with the old segment file
     with do
-      :ok = StoreHandler.close(h)
-      :ok = StoreManager.rename(@manager_impl, temp_file, new_seg.path)
-      :ok = StoreManager.rm(@manager_impl, path)
+      :ok = ExWal.File.close(h)
+      :ok = FS.rename(@fs_impl, temp_file, path)
+      :ok = FS.remove(@fs_impl, path)
     end
 
     # delete all segment files after the new segment
@@ -661,15 +674,15 @@ defmodule ExWal.Core do
     if cold_size > 0 do
       Enum.each(0..(cold_size - 1), fn i ->
         %Segment{path: path} = :array.get(i, cold)
-        :ok = StoreManager.rm(@manager_impl, path)
+        :ok = FS.remove(@fs_impl, path)
         :ok = LRU.delete(lru, path)
       end)
     end
 
     # reopen tail handler
-    {:ok, h} = @manager_impl |> StoreManager.new_store(new_seg.path) |> Store.open()
+    {:ok, h} = FS.open_read_write(@fs_impl, new_seg.path)
 
-    %__MODULE__{state | hot: new_seg, first_index: index, cold: :array.new(), tail_store_handler: h}
+    %__MODULE__{state | hot: new_seg, first_index: index, cold: :array.new(), tail_file: h}
   end
 
   defp __truncate_before(index, %__MODULE__{hot: %Segment{index: begin_index}} = state) when index < begin_index do
@@ -698,7 +711,7 @@ defmodule ExWal.Core do
     # delete all segment files and cache before the new segment
     Enum.each(0..idx, fn i ->
       %Segment{path: path} = :array.get(i, cold)
-      :ok = StoreManager.rm(@manager_impl, path)
+      :ok = FS.remove(@fs_impl, path)
     end)
 
     # rewrite file
@@ -707,8 +720,8 @@ defmodule ExWal.Core do
     temp_file = Path.join(data_path, "tmp")
 
     with do
-      :ok = @manager_impl |> StoreManager.new_store(temp_file) |> Store.write_all(new_seg.buf)
-      :ok = StoreManager.rename(@manager_impl, temp_file, new_seg.path)
+      :ok = write_content(temp_file, new_seg.buf)
+      :ok = FS.rename(@fs_impl, temp_file, new_seg.path)
     end
 
     cold_size = :array.size(cold)
@@ -720,30 +733,28 @@ defmodule ExWal.Core do
   end
 
   defp do_reinit(
-         %__MODULE__{data_path: data_path, lru_cache: lru, hot: %Segment{path: path}, tail_store_handler: h, cold: cold} =
-           state
+         %__MODULE__{data_path: data_path, lru_cache: lru, hot: %Segment{path: path}, tail_file: h, cold: cold} = state
        ) do
     # rm cache
     LRU.clear(lru)
 
     # rm hot
     with do
-      :ok = StoreHandler.close(h)
-      :ok = StoreManager.rm(@manager_impl, path)
+      :ok = ExWal.File.close(h)
+      :ok = FS.remove(@fs_impl, path)
     end
 
     # rm cold
     if :array.size(cold) > 0 do
       Enum.each(0..(:array.size(cold) - 1), fn i ->
         %Segment{path: path} = :array.get(i, cold)
-        :ok = StoreManager.rm(@manager_impl, path)
+        :ok = FS.remove(@fs_impl, path)
       end)
     end
 
     # reinit
     seg1_path = Path.join(data_path, segment_filename(1))
-
-    {:ok, h} = @manager_impl |> StoreManager.new_store(seg1_path) |> Store.open()
+    {:ok, h} = FS.create(@fs_impl, seg1_path)
 
     %__MODULE__{
       state
@@ -751,25 +762,25 @@ defmodule ExWal.Core do
         cold: :array.new(),
         first_index: -1,
         last_index: -1,
-        tail_store_handler: h
+        tail_file: h
     }
   end
 
-  defp do_clear(%__MODULE__{lru_cache: lru, hot: %Segment{path: path}, tail_store_handler: h, cold: cold}) do
+  defp do_clear(%__MODULE__{lru_cache: lru, hot: %Segment{path: path}, tail_file: h, cold: cold}) do
     # rm cache
     LRU.clear(lru)
 
     # rm hot
     with do
-      :ok = StoreHandler.close(h)
-      :ok = StoreManager.rm(@manager_impl, path)
+      :ok = ExWal.File.close(h)
+      :ok = FS.remove(@fs_impl, path)
     end
 
     # rm cold
     if :array.size(cold) > 0 do
       Enum.each(0..(:array.size(cold) - 1), fn i ->
         %Segment{path: path} = :array.get(i, cold)
-        :ok = StoreManager.rm(@manager_impl, path)
+        :ok = FS.remove(@fs_impl, path)
       end)
     end
 
@@ -784,5 +795,20 @@ defmodule ExWal.Core do
       end
 
     :array.from_list(for_result)
+  end
+
+  defp read_content(path, max_size) do
+    with {:ok, f} <- FS.open_read_write(@fs_impl, path),
+         {:ok, content} <- ExWal.File.read(f, max_size),
+         :ok <- ExWal.File.close(f) do
+      {:ok, content}
+    end
+  end
+
+  defp write_content(path, content) do
+    with {:ok, f} <- FS.open_read_write(@fs_impl, path),
+         {:ok, _} <- ExWal.File.write(f, content) do
+      ExWal.File.close(f)
+    end
   end
 end
