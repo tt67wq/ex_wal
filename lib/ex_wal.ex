@@ -50,7 +50,7 @@ defmodule ExWal do
           iex> :ok = stop()
       """
       @spec stop() :: :ok
-      def stop() do
+      def stop do
         delegate(:stop, [])
       end
 
@@ -98,54 +98,6 @@ defmodule ExWal do
       """
       @spec segment_count() :: non_neg_integer()
       def segment_count, do: delegate(:segment_count, [])
-
-      @doc """
-      Truncates the write-ahead log (WAL) after a specific index.
-
-      ## Examples
-
-          iex> truncate_after(:my_wal, 10)
-          :ok
-
-      ## Parameters
-
-        * `index` - The index after which to truncate the WAL.
-        * `timeout` (optional) - The timeout value in milliseconds (default: 5000).
-
-      ## Returns
-
-      - `:ok` - If the truncation is successful.
-      - `{:error, :index_out_of_range}` - If the provided index is out of range.
-
-      """
-      @spec truncate_after(Typespecs.index(), non_neg_integer()) :: :ok | {:error, :index_out_of_range}
-      def truncate_after(index, timeout \\ 5000) do
-        delegate(:truncate_after, [index, timeout])
-      end
-
-      @doc """
-      Truncates the write-ahead log (WAL) before a specific index.
-
-      ## Examples
-
-          iex> truncate_before(:my_wal, 10)
-          :ok
-
-      ## Parameters
-
-        * `index` - The index before which to truncate the WAL.
-        * `timeout` (optional) - The timeout value in milliseconds (default: 5000).
-
-      ## Returns
-
-      - `:ok` - If the truncation is successful.
-      - `{:error, :index_out_of_range}` - If the provided index is out of range.
-
-      """
-      @spec truncate_before(Typespecs.index(), non_neg_integer()) :: :ok | {:error, :index_out_of_range}
-      def truncate_before(index, timeout \\ 5000) do
-        delegate(:truncate_before, [index, timeout])
-      end
 
       @doc """
 

@@ -8,6 +8,7 @@ help:
 	@echo "  build - Build the project"
 	@echo "  deps.get - Install dependencies"
 	@echo "  deps.upgrade - Upgrade dependencies"
+	@echo "  deps.purge - Purge dependencies"
 	@echo "  compile - Compile the project"
 	@echo "  lint - Lint the code"
 	@echo "  test - Run tests"

@@ -15,9 +15,9 @@ defimpl ExWal.FS, for: ExWal.FS.Default do
       File.rm(name)
     end
 
-    with {:ok, f} <- File.open(name, [:write, :binary, :raw, :exclusive, {:read_ahead, 4096}]),
+    with {:ok, f} <- File.open(name, [:write, :binary, :read, :exclusive, {:read_ahead, 4096}]),
          :ok <- File.chmod(name, 0o666) do
-      {:ok, %ExWal.File.Unix{fd: f}}
+      {:ok, %ExWal.File.Default{fd: f}}
     end
   end
 
@@ -32,12 +32,21 @@ defimpl ExWal.FS, for: ExWal.FS.Default do
     File.rm(name)
   end
 
-  @spec open_read_write(impl :: ExWal.FS.t(), name :: String.t()) ::
+  @spec open(impl :: ExWal.FS.t(), name :: String.t(), opts :: Keyword.t()) ::
           {:ok, file :: ExWal.File.t()} | {:error, reason :: term}
-  def open_read_write(_, name) do
-    with {:ok, f} <- File.open(name, [:write, :binary, :raw, {:read_ahead, 4096}]),
+  def open(_, name, _opts) do
+    with {:ok, f} <- File.open(name, [:read, :binary, {:read_ahead, 4096}]),
          :ok <- File.chmod(name, 0o666) do
-      {:ok, %ExWal.File.Unix{fd: f}}
+      {:ok, %ExWal.File.Default{fd: f}}
+    end
+  end
+
+  @spec open_read_write(impl :: ExWal.FS.t(), name :: String.t(), opts :: Keyword.t()) ::
+          {:ok, file :: ExWal.File.t()} | {:error, reason :: term}
+  def open_read_write(_, name, _opts) do
+    with {:ok, f} <- File.open(name, [:append, :binary, :read, {:read_ahead, 4096}]),
+         :ok <- File.chmod(name, 0o666) do
+      {:ok, %ExWal.File.Default{fd: f}}
     end
   end
 
@@ -47,7 +56,7 @@ defimpl ExWal.FS, for: ExWal.FS.Default do
 
   @spec remove_all(impl :: ExWal.FS.t(), name :: String.t()) :: :ok | {:error, reason :: File.posix()}
   def remove_all(_, name) do
-    File.rmdir(name)
+    :file.del_dir_r(name)
   end
 
   @spec rename(impl :: ExWal.FS.t(), old_name :: String.t(), new_name :: String.t()) ::
@@ -62,7 +71,7 @@ defimpl ExWal.FS, for: ExWal.FS.Default do
     with :ok <- File.rename(old_name, new_name),
          {:ok, f} <- File.open(new_name, [:write, :binary, :raw, {:read_ahead, 4096}]),
          :ok <- File.chmod(new_name, 0o666) do
-      {:ok, %ExWal.File.Unix{fd: f}}
+      {:ok, %ExWal.File.Default{fd: f}}
     end
   end
 
