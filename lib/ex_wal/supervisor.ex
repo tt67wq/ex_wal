@@ -9,11 +9,11 @@ defmodule ExWal.Supervisor do
 
   @doc false
   @impl Supervisor
-  def init({name, config}) do
+  def init({name, _config}) do
     children =
       [
-        {ExWal.LRU, {lru_name(name), 1024, []}},
-        {ExWal.Core, {config, lru_name(name), name}}
+        {ExWal.Recycler.ETS, {recycler_name(name)}},
+        {Registry, name: registry_name(name)}
       ]
 
     Supervisor.init(children, strategy: :one_for_one)
@@ -23,7 +23,11 @@ defmodule ExWal.Supervisor do
     Module.concat(name, Supervisor)
   end
 
-  defp lru_name(name) do
-    Module.concat(name, LRU)
+  defp recycler_name(name) do
+    Module.concat(name, Recycler)
+  end
+
+  defp registry_name(name) do
+    Module.concat(name, Registry)
   end
 end
