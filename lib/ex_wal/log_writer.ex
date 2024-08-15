@@ -12,13 +12,14 @@ defmodule ExWal.LogWriter.Single do
   log writer writes records to a WAL file.
   """
 
-  use GenServer
+  use GenServer, restart: :transient
 
   alias ExWal.Constant.Record
   alias ExWal.Models
   alias ExWal.Models.Block
 
   require ExWal.Constant.Record
+  require Logger
 
   @recyclable_full_chunk_type Record.recyclable_full_chunk_type()
   @recyclable_first_chunk_type Record.recyclable_first_chunk_type()
@@ -28,8 +29,6 @@ defmodule ExWal.LogWriter.Single do
   @block_size 32 * 1024
   @legacy_header_size 7
   @recyclable_header_size @legacy_header_size + 4
-
-  defstruct name: nil, log_num: nil, file: nil, block: nil, block_num: 0, flush?: false, pending: [], sync_f: nil
 
   @type t :: %__MODULE__{
           name: GenServer.name(),
@@ -41,6 +40,8 @@ defmodule ExWal.LogWriter.Single do
           pending: [Block.t()],
           sync_f: GenServer.from()
         }
+
+  defstruct name: nil, log_num: nil, file: nil, block: nil, block_num: 0, flush?: false, pending: [], sync_f: nil
 
   def start_link({name, file, log_num}) do
     GenServer.start_link(__MODULE__, {name, file, log_num}, name: name)
@@ -63,11 +64,10 @@ defmodule ExWal.LogWriter.Single do
   end
 
   @impl GenServer
-  def terminate(_reason, %__MODULE__{sync_f: nil}), do: :ok
 
-  def terminate(_reason, %__MODULE__{sync_f: from}) do
-    GenServer.reply(from, {:error, :closed})
-    :ok
+  def terminate(reason, %__MODULE__{name: name} = state) do
+    Logger.warning("log writer #{inspect(name)} is terminated with reason: #{inspect(reason)}")
+    response_on_closing(state)
   end
 
   @impl GenServer
@@ -76,7 +76,7 @@ defmodule ExWal.LogWriter.Single do
   def handle_continue(:flush, %__MODULE__{flush?: true, pending: []} = state) do
     %__MODULE__{file: file, block: block} = state
 
-    ExWal.File.write(file, Block.flushable(block))
+    :ok = ExWal.File.write(file, Block.flushable(block))
 
     may_response(state)
     {:noreply, %__MODULE__{state | block: Block.flush_to_written(block), flush?: false}}
@@ -111,7 +111,8 @@ defmodule ExWal.LogWriter.Single do
 
   defp emit_fragment(state, n, p) do
     %__MODULE__{log_num: log_num, block: block} = state
-    rest_room = @block_size - block[:written] - @recyclable_header_size
+    %Block{written: written} = block
+    rest_room = @block_size - written - @recyclable_header_size
 
     type = recyclable_flag(rest_room >= byte_size(p), n == 0)
     payload = binary_slice(p, 0, rest_room)
@@ -128,7 +129,7 @@ defmodule ExWal.LogWriter.Single do
     block = Block.append(block, buf)
 
     state
-    |> may_queue_block(block, @block_size - block[:written] < @recyclable_header_size)
+    |> may_queue_block(block, @block_size - written < @recyclable_header_size)
     |> emit_fragment(n + 1, rest_p)
   end
 
@@ -157,12 +158,21 @@ defmodule ExWal.LogWriter.Single do
   defp recyclable_flag(false, true), do: @recyclable_first_chunk_type
   defp recyclable_flag(false, false), do: @recyclable_middle_chunk_type
 
-  defp written_offset(%__MODULE__{block_num: block_num, block: block}), do: block_num * @block_size + block[:written]
+  defp written_offset(%__MODULE__{block_num: block_num, block: %Block{written: written}}),
+    do: block_num * @block_size + written
 
   defp may_response(%__MODULE__{sync_f: nil}), do: :ok
 
-  defp may_response(%__MODULE__{sync_f: from} = m) do
+  defp may_response(m) do
+    %__MODULE__{sync_f: from} = m
     GenServer.reply(from, {:ok, written_offset(m)})
+  end
+
+  defp response_on_closing(%__MODULE__{sync_f: nil}), do: :ok
+
+  defp response_on_closing(m) do
+    %__MODULE__{sync_f: from} = m
+    GenServer.reply(from, {:error, :closed})
   end
 end
 
