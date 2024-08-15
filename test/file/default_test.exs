@@ -1,4 +1,4 @@
-defmodule FileTest do
+defmodule File.DefaultTest do
   @moduledoc false
   use ExUnit.Case
 

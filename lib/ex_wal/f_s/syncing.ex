@@ -24,6 +24,8 @@ defmodule ExWal.FS.Syncing do
 
   def create(name, fname), do: Agent.get(name, __MODULE__, :handle_create, [fname])
 
+  def open_read_write(name, fname), do: Agent.get(name, __MODULE__, :handle_open_read_write, [fname])
+
   # ---------------- handlers -------------
 
   def init(name, fs, dynamic, registry) do
@@ -32,6 +34,13 @@ defmodule ExWal.FS.Syncing do
 
   def handle_create(%__MODULE__{fs: fs, dynamic: dynamic, registry: registry}, name) do
     {:ok, file} = FS.create(fs, name)
+    file_name = file_name(registry, name)
+    {:ok, _} = DynamicSupervisor.start_child(dynamic, {ExWal.File.Syncing, {file_name, file, 1024 * 1024}})
+    {:ok, ExWal.File.Syncing.get(file_name)}
+  end
+
+  def handle_open_read_write(%__MODULE__{fs: fs, dynamic: dynamic, registry: registry}, name) do
+    {:ok, file} = FS.open_read_write(fs, name)
     file_name = file_name(registry, name)
     {:ok, _} = DynamicSupervisor.start_child(dynamic, {ExWal.File.Syncing, {file_name, file, 1024 * 1024}})
     {:ok, ExWal.File.Syncing.get(file_name)}
@@ -48,12 +57,15 @@ defimpl ExWal.FS, for: ExWal.FS.Syncing do
     Syncing.create(name, fname)
   end
 
+  def open_read_write(%Syncing{name: name}, fname, _opts) do
+    Syncing.open_read_write(name, fname)
+  end
+
   defp delegate(%Syncing{fs: fs}, method, args), do: apply(FS, method, [fs | args])
 
   def link(impl, old_name, new_name), do: delegate(impl, :link, [old_name, new_name])
   def remove(impl, name), do: delegate(impl, :remove, [name])
   def open(impl, name, opts), do: delegate(impl, :open, [name, opts])
-  def open_read_write(impl, name, opts), do: delegate(impl, :open_read_write, [name, opts])
   def open_dir(impl, name), do: delegate(impl, :open_dir, [name])
   def remove_all(impl, name), do: delegate(impl, :remove_all, [name])
   def rename(impl, old_name, new_name), do: delegate(impl, :rename, [old_name, new_name])

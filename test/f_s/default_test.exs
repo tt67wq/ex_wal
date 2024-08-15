@@ -1,4 +1,4 @@
-defmodule FSTest do
+defmodule FS.DefaultTest do
   @moduledoc false
   use ExUnit.Case
 
