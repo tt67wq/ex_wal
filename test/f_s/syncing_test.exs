@@ -29,4 +29,9 @@ defmodule FS.SyncingTest do
     assert :ok == FS.mkdir_all(fs, @path)
     assert {:ok, _} = FS.create(fs, Path.join(@path, "for_create.txt"))
   end
+
+  test "open_read_write", %{fs: fs} do
+    assert :ok == FS.mkdir_all(fs, @path)
+    assert {:ok, _} = FS.open_read_write(fs, Path.join(@path, "for_open_read_write.txt"))
+  end
 end

@@ -1,7 +1,7 @@
 defmodule ExWal.File.Syncing do
   @moduledoc false
 
-  use Agent
+  use Agent, restart: :transient
 
   @type t :: %__MODULE__{
           name: String.t(),
@@ -27,7 +27,7 @@ defmodule ExWal.File.Syncing do
 
   def close(name) do
     Agent.get(name, __MODULE__, :handle_close, [])
-    Agent.stop(name)
+    Agent.stop(name, :shutdown)
   end
 
   def write(name, bytes), do: Agent.get_and_update(name, __MODULE__, :handle_write, [bytes])

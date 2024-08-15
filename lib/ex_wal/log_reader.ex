@@ -9,7 +9,7 @@ end
 defmodule ExWal.LogReader.Single do
   @moduledoc false
 
-  use Agent
+  use Agent, restart: :transient
 
   alias ExWal.Constant.Record
   alias ExWal.Models
