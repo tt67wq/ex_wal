@@ -13,7 +13,27 @@ defmodule ExWal.Supervisor do
     children =
       [
         {ExWal.Recycler.ETS, {recycler_name(name)}},
-        {Registry, name: registry_name(name)}
+        {Registry, name: registry_name(name)},
+        {DynamicSupervisor, name: dynamic_sup_name(name), strategy: :one_for_one},
+        {
+          ExWal.FS.Syncing,
+          {
+            syncing_name(name),
+            %ExWal.FS.Default{},
+            dynamic_sup_name(name),
+            registry_name(name)
+          }
+        },
+        {
+          ExWal.Core,
+          {
+            core_name(name),
+            dynamic_sup_name(name),
+            registry_name(name),
+            recycler_name(name),
+            name |> syncing_name() |> ExWal.FS.Syncing.get()
+          }
+        }
       ]
 
     Supervisor.init(children, strategy: :one_for_one)
@@ -29,5 +49,17 @@ defmodule ExWal.Supervisor do
 
   defp registry_name(name) do
     Module.concat(name, Registry)
+  end
+
+  defp dynamic_sup_name(name) do
+    Module.concat(name, DynamicSupervisor)
+  end
+
+  defp syncing_name(name) do
+    Module.concat(name, FS.Syncing)
+  end
+
+  defp core_name(name) do
+    Module.concat(name, Core)
   end
 end
