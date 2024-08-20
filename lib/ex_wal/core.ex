@@ -57,7 +57,17 @@ defmodule ExWal.Core do
     {:ok, _} =
       DynamicSupervisor.start_child(
         dynamic_sup,
-        {Manager.Standalone, {manager_name, recycler, dynamic_sup, registry, fs, dirname}}
+        {
+          Manager.Standalone,
+          {
+            manager_name,
+            recycler,
+            dynamic_sup,
+            registry,
+            fs,
+            dirname
+          }
+        }
       )
 
     {:ok, Manager.Standalone.get(manager_name)}

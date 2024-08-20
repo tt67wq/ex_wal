@@ -84,6 +84,7 @@ defmodule ExWal.Manager.Standalone do
   @impl GenServer
   def handle_continue(:initialize, state) do
     %__MODULE__{dirname: dirname, fs: fs, recycler: recycler} = state
+    :ok = FS.mkdir_all(fs, dirname)
     {:ok, files} = FS.list(fs, dirname)
 
     files

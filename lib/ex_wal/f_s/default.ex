@@ -87,7 +87,13 @@ defimpl ExWal.FS, for: ExWal.FS.Default do
 
   @spec list(impl :: ExWal.FS.t(), name :: String.t()) :: {:ok, [binary()]} | {:error, reason :: File.posix()}
   def list(_, name) do
-    File.ls(name)
+    name
+    |> File.ls()
+    |> case do
+      {:ok, files} -> {:ok, files}
+      {:error, :enoent} -> {:ok, []}
+      {:error, reason} -> {:error, reason}
+    end
   end
 
   @spec stat(impl :: ExWal.FS.t(), name :: String.t()) :: {:ok, File.Stat.t()} | {:error, reason :: File.posix()}
