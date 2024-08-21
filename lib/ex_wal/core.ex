@@ -52,6 +52,10 @@ defmodule ExWal.Core do
       fs: fs
     } = state
 
+    # start sub registry
+    sub_registry = {:via, Registry, {registry, {:manager_registry, dirname}}}
+    {:ok, _} = DynamicSupervisor.start_child(dynamic_sup, {Registry, name: sub_registry})
+
     manager_name = {:via, Registry, {registry, {:manager, dirname}}}
 
     {:ok, _} =
@@ -63,7 +67,7 @@ defmodule ExWal.Core do
             manager_name,
             recycler,
             dynamic_sup,
-            registry,
+            sub_registry,
             fs,
             dirname
           }
