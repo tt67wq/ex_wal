@@ -89,7 +89,16 @@ defmodule ExWal.Manager.Standalone do
 
     files
     |> Enum.map(fn f -> Models.VirtualLog.parse_filename(f) end)
-    |> Enum.each(fn {log_num, _} -> Recycler.add(recycler, log_num) end)
+    |> Enum.each(fn {log_num, _} ->
+      recycler
+      |> Recycler.get_min()
+      |> Kernel.<=(log_num)
+      |> if do
+        Recycler.set_min(recycler, log_num + 1)
+      end
+
+      Recycler.add(recycler, log_num)
+    end)
 
     {:noreply, state}
   end

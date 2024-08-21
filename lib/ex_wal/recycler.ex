@@ -14,6 +14,18 @@ defprotocol ExWal.Recycler do
   def add(impl, log_num)
 
   @doc """
+  set_min sets the minimum log number that is allowed to be recycled.
+  """
+  @spec set_min(impl :: t(), log_num :: log_num()) :: :ok
+  def set_min(impl, log_num)
+
+  @doc """
+  get_min returns the current minimum log number that is allowed to be recycled.
+  """
+  @spec get_min(impl :: t()) :: log_num()
+  def get_min(impl)
+
+  @doc """
   Peek returns the log at the head of the recycling queue, or the zero value
   fileInfo and false if the queue is empty.
   """
@@ -56,6 +68,16 @@ defmodule ExWal.Recycler.ETS do
     Agent.get_and_update(name, __MODULE__, :handle_add, [log_num])
   end
 
+  @spec set_min(name :: atom(), log_num :: log_num()) :: :ok
+  def set_min(name, log_num) do
+    Agent.get_and_update(name, __MODULE__, :handle_set_min, [log_num])
+  end
+
+  @spec get_min(name :: atom()) :: log_num()
+  def get_min(name) do
+    Agent.get(name, __MODULE__, :handle_get_min, [])
+  end
+
   @spec peek(name :: atom()) :: log_num() | nil
   def peek(name) do
     Agent.get(name, __MODULE__, :handle_peek, [])
@@ -92,6 +114,12 @@ defmodule ExWal.Recycler.ETS do
     {true, state}
   end
 
+  def handle_set_min(state, log_num) do
+    {:ok, %__MODULE__{state | min: log_num}}
+  end
+
+  def handle_get_min(%__MODULE__{min: min}), do: min
+
   def handle_peek(state)
   def handle_peek(%__MODULE__{size: 0}), do: nil
 
@@ -119,6 +147,14 @@ defimpl ExWal.Recycler, for: ExWal.Recycler.ETS do
 
   def add(%ETS{name: name}, log_num) do
     ETS.add(name, log_num)
+  end
+
+  def set_min(%ETS{name: name}, log_num) do
+    ETS.set_min(name, log_num)
+  end
+
+  def get_min(%ETS{name: name}) do
+    ETS.get_min(name)
   end
 
   def peek(%ETS{name: name}) do
