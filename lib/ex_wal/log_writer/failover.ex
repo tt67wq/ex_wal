@@ -58,19 +58,28 @@ defmodule ExWal.LogWriter.Failover do
   #   {:reply, :ok, state}
   # end
 
+  def handle_info({_task, {:switch_dir, {:ok, new_dir, writer_name}}}, state) do
+    %__MODULE__{writers: {writers, idx}} = state
+    {:noreply, %__MODULE__{state | dir: new_dir, writers: {[writer_name | writers], idx + 1}}}
+  end
+
+  def handle_info(_, state), do: {:noreply, state}
+
   # ----------------- private funcs -----------------
 
   defp switch_dir(new_dir, state)
   defp switch_dir(_, %__MODULE__{writers: {_, @max_log_writer}} = state), do: {:stop, :normal, state}
 
-  defp switch_dir(new_dir, %__MODULE__{writers: {writers, idx}} = state) do
+  defp switch_dir(new_dir, %__MODULE__{writers: {_writers, idx}} = state) do
     %__MODULE__{fs: fs, log_num: log_num, registry: registry, dynamic_sup: dsp} = state
-    # new single writer
-    log_name = Path.join(new_dir, Models.VirtualLog.filename(log_num, idx))
-    writer_name = {:via, Registry, {registry, {:writer, log_num, idx}}}
-    {:ok, file} = FS.create(fs, log_name)
-    {:ok, _} = DynamicSupervisor.start_child(dsp, {Single, {writer_name, file, log_num}})
-    {:noreply, %__MODULE__{state | writers: {[writer_name | writers], idx + 1}}}
+    # create writer asynchonously
+    Task.async(fn ->
+      log_name = Path.join(new_dir, Models.VirtualLog.filename(log_num, idx))
+      writer_name = {:via, Registry, {registry, {:writer, log_num, idx}}}
+      {:ok, file} = FS.create(fs, log_name)
+      {:ok, _} = DynamicSupervisor.start_child(dsp, {Single, {writer_name, file, log_num}})
+      {:switch_dir, {:ok, new_dir, writer_name}}
+    end)
   end
 
   defp close_writers(state) do
