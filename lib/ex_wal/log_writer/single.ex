@@ -74,17 +74,19 @@ defmodule ExWal.LogWriter.Single do
   end
 
   def handle_continue(:flush, %__MODULE__{flush?: true} = state) do
-    %__MODULE__{file: file, pending: pending} = state
+    %__MODULE__{file: file, pending: pending, block: block} = state
 
     pending
     |> Enum.reverse()
-    |> Enum.each(fn block ->
-      ExWal.File.write(file, Block.flushable(block))
+    |> Enum.each(fn b ->
+      :ok = ExWal.File.write(file, Block.flushable(b))
     end)
+
+    :ok = ExWal.File.write(file, Block.flushable(block))
 
     may_response(state)
 
-    {:noreply, %__MODULE__{state | flush?: false, pending: []}}
+    {:noreply, %__MODULE__{state | flush?: false, block: Block.flush_to_written(block), pending: []}}
   end
 
   @impl GenServer
@@ -132,12 +134,12 @@ defmodule ExWal.LogWriter.Single do
 
   defp may_queue_block(state, block, true) do
     block = Block.fullfill(block, @block_size)
-    %__MODULE__{block_num: block_num} = state
+    %__MODULE__{block_num: block_num, pending: pending} = state
 
     %__MODULE__{
       state
       | block: %Block{},
-        pending: block,
+        pending: [block | pending],
         flush?: true,
         block_num: block_num + 1
     }

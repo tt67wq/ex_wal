@@ -3,7 +3,7 @@ defmodule ExWal.LogWriter.Failover do
   FailoverWriter is the implementation of LogWriter in failover mode.
   """
 
-  use GenServer
+  use GenServer, restart: :transient
 
   alias ExWal.FS
   alias ExWal.LogWriter.Single
@@ -45,16 +45,18 @@ defmodule ExWal.LogWriter.Failover do
     }
   end
 
-  def terminate(:normal, state), do: close_writers(state)
-
   def terminate(reason, state) do
-    Logger.error("FailoverWriter: terminate: #{inspect(reason)}")
+    may_log_reason(reason)
     close_writers(state)
   end
 
   def handle_continue({:switch_dir, dir}, state) do
     switch_dir(dir, state)
   end
+
+  # def handle_call({:sync_writes, bytes}, _, state) do
+  #   {:reply, :ok, state}
+  # end
 
   # ----------------- private funcs -----------------
 
@@ -65,14 +67,17 @@ defmodule ExWal.LogWriter.Failover do
     %__MODULE__{fs: fs, log_num: log_num, registry: registry, dynamic_sup: dsp} = state
     # new single writer
     log_name = Path.join(new_dir, Models.VirtualLog.filename(log_num, idx))
+    writer_name = {:via, Registry, {registry, {:writer, log_num, idx}}}
     {:ok, file} = FS.create(fs, log_name)
-    name = {:via, Registry, {registry, {:writer, log_num, idx}}}
-    {:ok, _} = DynamicSupervisor.start_child(dsp, {Single, {name, file, log_num}})
-    {:noreply, %__MODULE__{state | writers: {[name | writers], idx + 1}}}
+    {:ok, _} = DynamicSupervisor.start_child(dsp, {Single, {writer_name, file, log_num}})
+    {:noreply, %__MODULE__{state | writers: {[writer_name | writers], idx + 1}}}
   end
 
   defp close_writers(state) do
     %__MODULE__{writers: {writers, _}} = state
     Enum.each(writers, &Single.stop/1)
   end
+
+  defp may_log_reason(:normal), do: :pass
+  defp may_log_reason(reason), do: Logger.error("FailoverWriter terminate: #{inspect(reason)}")
 end
