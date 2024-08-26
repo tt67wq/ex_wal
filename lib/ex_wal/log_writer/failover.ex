@@ -6,6 +6,7 @@ defmodule ExWal.LogWriter.Failover do
   use GenServer, restart: :transient
 
   alias ExWal.FS
+  alias ExWal.LogWriter
   alias ExWal.LogWriter.Single
   alias ExWal.Models
 
@@ -13,7 +14,15 @@ defmodule ExWal.LogWriter.Failover do
 
   @max_log_writer 10
 
-  defstruct name: nil, registry: nil, dynamic_sup: nil, fs: nil, dir: "", log_num: 0, q: [], writers: {[], 0}
+  defstruct name: nil,
+            registry: nil,
+            dynamic_sup: nil,
+            fs: nil,
+            dir: "",
+            log_num: 0,
+            q: [],
+            writers: {[], 0},
+            logical_offset: 0
 
   def start_link({name, registry, dynamic_sup, fs, dir, log_num}) do
     GenServer.start_link(
@@ -54,9 +63,20 @@ defmodule ExWal.LogWriter.Failover do
     switch_dir(dir, state)
   end
 
-  # def handle_call({:sync_writes, bytes}, _, state) do
-  #   {:reply, :ok, state}
-  # end
+  def handle_call({:sync_writes, _} = input, _, %__MODULE__{writers: []} = state) do
+    %__MODULE__{logical_offset: logical_offset} = state
+    {:sync_writes, p} = input
+    logical_offset = logical_offset + byte_size(p)
+    {:reply, logical_offset, %__MODULE__{state | logical_offset: logical_offset}}
+  end
+
+  def handle_call({:sync_writes, _} = input, _, state) do
+    %__MODULE__{writers: {[writer | _], _}, logical_offset: logical_offset} = state
+    {:sync_writes, p} = input
+    {:ok, offset} = LogWriter.write_record(writer, p)
+    logical_offset = logical_offset + offset
+    {:reply, logical_offset, %__MODULE__{state | logical_offset: logical_offset}}
+  end
 
   def handle_info({_task, {:switch_dir, {:ok, new_dir, writer_name}}}, state) do
     %__MODULE__{writers: {writers, idx}} = state
@@ -80,6 +100,8 @@ defmodule ExWal.LogWriter.Failover do
       {:ok, _} = DynamicSupervisor.start_child(dsp, {Single, {writer_name, file, log_num}})
       {:switch_dir, {:ok, new_dir, writer_name}}
     end)
+
+    {:noreply, state}
   end
 
   defp close_writers(state) do

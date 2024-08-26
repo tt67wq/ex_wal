@@ -27,12 +27,10 @@ defmodule ExWal.LogWriter.Single do
           file: ExWal.File.t(),
           block: Block.t(),
           block_num: non_neg_integer(),
-          flush?: boolean(),
-          pending: [Block.t()],
-          sync_f: GenServer.from()
+          pending: %{non_neg_integer() => Block.t()}
         }
 
-  defstruct name: nil, log_num: nil, file: nil, block: nil, block_num: 0, flush?: false, pending: [], sync_f: nil
+  defstruct name: nil, log_num: nil, file: nil, block: nil, block_num: 0, pending: %{}
 
   def start_link({name, file, log_num}) do
     GenServer.start_link(__MODULE__, {name, file, log_num}, name: name)
@@ -51,53 +49,74 @@ defmodule ExWal.LogWriter.Single do
   # ------------ server ------------
   @impl GenServer
   def init({name, file, log_num}) do
-    {:ok, %__MODULE__{name: name, log_num: log_num, file: file, block: %Block{}}}
+    {:ok, %__MODULE__{name: name, log_num: log_num, file: file, block: Block.new()}}
   end
 
   @impl GenServer
 
-  def terminate(reason, %__MODULE__{name: name} = state) do
+  def terminate(reason, %__MODULE__{name: name}) do
     Logger.warning("log writer #{inspect(name)} is terminated with reason: #{inspect(reason)}")
-    response_on_closing(state)
   end
 
   @impl GenServer
-  def handle_continue(:flush, %__MODULE__{flush?: false} = state), do: {:noreply, state}
-
-  def handle_continue(:flush, %__MODULE__{flush?: true, pending: []} = state) do
-    %__MODULE__{file: file, block: block} = state
-
-    :ok = ExWal.File.write(file, Block.flushable(block))
-
-    may_response(state)
-    {:noreply, %__MODULE__{state | block: Block.flush_to_written(block), flush?: false}}
-  end
-
-  def handle_continue(:flush, %__MODULE__{flush?: true} = state) do
-    %__MODULE__{file: file, pending: pending, block: block} = state
-
-    pending
-    |> Enum.reverse()
-    |> Enum.each(fn b ->
-      :ok = ExWal.File.write(file, Block.flushable(b))
-    end)
-
-    :ok = ExWal.File.write(file, Block.flushable(block))
-
-    may_response(state)
-
-    {:noreply, %__MODULE__{state | flush?: false, block: Block.flush_to_written(block), pending: []}}
-  end
-
-  @impl GenServer
-  def handle_call({:sync_write, p}, from, state) do
+  def handle_call({:sync_write, p}, _from, state) do
     state = emit_fragment(state, 0, p)
-    {:noreply, %__MODULE__{state | flush?: true, sync_f: from}, {:continue, :flush}}
+    flush(state)
+    {:reply, {:ok, written_offset(state)}, state}
   end
 
   def handle_call(:self, _, state), do: {:reply, state, state}
 
+  @impl GenServer
+  def handle_info({_task, {:flush_task, ret}}, state) do
+    {:ok, flushed_pending_nums, {hot_block, hot_block_num}} = ret
+    %__MODULE__{pending: pending, block: block, block_num: block_num} = state
+
+    new_pending = Map.drop(pending, flushed_pending_nums)
+
+    state =
+      if hot_block_num == block_num do
+        # still hot
+        block = Block.flush_to(block, hot_block.written)
+        %__MODULE__{state | block: block, pending: new_pending}
+      else
+        # already in pending
+        b =
+          new_pending
+          |> Map.fetch!(hot_block_num)
+          |> Block.flush_to(hot_block.written)
+
+        %__MODULE__{state | pending: Map.put(new_pending, hot_block_num, b)}
+      end
+
+    {:noreply, state}
+  end
+
+  def handle_info(_, state), do: {:noreply, state}
+
   # ------------ private methods ------------
+
+  defp flush(state) do
+    %__MODULE__{block: block, block_num: block_num, pending: pending, file: file} = state
+
+    ns =
+      pending
+      |> Map.keys()
+      |> Enum.sort(:desc)
+
+    to_flush =
+      Enum.map(ns, fn n -> Map.fetch!(pending, n) end)
+
+    flush_content =
+      [Block.flushable(block) | to_flush]
+      |> Enum.reverse()
+      |> IO.iodata_to_binary()
+
+    Task.async(fn ->
+      :ok = ExWal.File.write(file, flush_content)
+      {:flush_task, {:ok, ns, {block, block_num}}}
+    end)
+  end
 
   defp emit_fragment(state, n, p)
   defp emit_fragment(state, n, <<>>) when n > 0, do: state
@@ -138,9 +157,8 @@ defmodule ExWal.LogWriter.Single do
 
     %__MODULE__{
       state
-      | block: %Block{},
-        pending: [block | pending],
-        flush?: true,
+      | block: Block.new(),
+        pending: Map.put_new(pending, block_num, block),
         block_num: block_num + 1
     }
   end
@@ -153,20 +171,6 @@ defmodule ExWal.LogWriter.Single do
 
   defp written_offset(%__MODULE__{block_num: block_num, block: %Block{written: written}}),
     do: block_num * @block_size + written
-
-  defp may_response(%__MODULE__{sync_f: nil}), do: :ok
-
-  defp may_response(m) do
-    %__MODULE__{sync_f: from} = m
-    GenServer.reply(from, {:ok, written_offset(m)})
-  end
-
-  defp response_on_closing(%__MODULE__{sync_f: nil}), do: :ok
-
-  defp response_on_closing(m) do
-    %__MODULE__{sync_f: from} = m
-    GenServer.reply(from, {:error, :closed})
-  end
 end
 
 defimpl ExWal.LogWriter, for: ExWal.LogWriter.Single do

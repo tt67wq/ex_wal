@@ -35,5 +35,6 @@ defmodule Writer.SingleTest do
 
     assert {:ok, 16} = LogWriter.write_record(writter, "hello")
     assert {:ok, 33} = LogWriter.write_record(writter, " world")
+    Process.sleep(100)
   end
 end
