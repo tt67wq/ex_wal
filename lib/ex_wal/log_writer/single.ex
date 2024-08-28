@@ -54,12 +54,14 @@ defmodule ExWal.LogWriter.Single do
 
   @impl GenServer
 
-  def terminate(reason, state) do
-    may_log_reason(reason)
-
+  def terminate(:normal, state) do
     state
     |> emit_eof_trailer()
     |> sync_flush()
+  end
+
+  def terminate(reason, _state) do
+    Logger.error("Single writer terminate: #{inspect(reason)}")
   end
 
   @impl GenServer
@@ -197,9 +199,6 @@ defmodule ExWal.LogWriter.Single do
 
   defp written_offset(%__MODULE__{block_num: block_num, block: %Block{written: written}}),
     do: block_num * @block_size + written
-
-  defp may_log_reason(:normal), do: :pass
-  defp may_log_reason(reason), do: Logger.error("Single writer terminate: #{inspect(reason)}")
 end
 
 defimpl ExWal.LogWriter, for: ExWal.LogWriter.Single do

@@ -19,7 +19,11 @@ defmodule ExWal.LogWriter.Failover do
             fs: nil,
             dir: "",
             log_num: 0,
-            writers: [],
+            writers: %{
+              s: %{},
+              cnt: 0
+            },
+            q: [],
             logical_offset: %{
               offset: 0,
               latest_writer: nil,
@@ -65,17 +69,19 @@ defmodule ExWal.LogWriter.Failover do
     switch_dir(dir, state)
   end
 
-  def handle_call({:sync_writes, _} = input, _, %__MODULE__{writers: []} = state) do
-    %__MODULE__{logical_offset: logical_offset} = state
+  def handle_call({:sync_writes, _} = input, _, %__MODULE__{writers: %{cnt: 0}} = state) do
+    %__MODULE__{logical_offset: logical_offset, q: q} = state
     {:sync_writes, p} = input
     %{offset: offset} = logical_offset
     offset = offset + byte_size(p)
-    {:reply, {:ok, offset}, %__MODULE__{state | logical_offset: %{logical_offset | offset: offset}}}
+
+    {:reply, {:ok, offset}, %__MODULE__{state | logical_offset: %{logical_offset | offset: offset}, q: [p | q]}}
   end
 
   # estimate
   def handle_call({:sync_writes, _} = input, _, %__MODULE__{logical_offset: %{estimated_offset?: true}} = state) do
-    %__MODULE__{writers: [writer | _], logical_offset: logical_offset} = state
+    %__MODULE__{writers: writers, logical_offset: logical_offset} = state
+    writer = get_latest_writer(writers)
     {:sync_writes, p} = input
 
     {:ok, of} = LogWriter.write_record(writer, p)
@@ -84,7 +90,8 @@ defmodule ExWal.LogWriter.Failover do
   end
 
   def handle_call({:sync_writes, _} = input, _, state) do
-    %__MODULE__{writers: [writer | _], logical_offset: logical_offset} = state
+    %__MODULE__{writers: writers, logical_offset: logical_offset} = state
+    writer = get_latest_writer(writers)
     {:sync_writes, p} = input
     %{latest_log_size: ls, offset: offset} = logical_offset
 
@@ -94,9 +101,13 @@ defmodule ExWal.LogWriter.Failover do
     {:reply, {:ok, logical_offset.offset}, %__MODULE__{state | logical_offset: logical_offset}}
   end
 
-  def handle_info({_task, {:switch_dir_notify, {:ok, new_dir, writer_name}}}, state) do
-    %__MODULE__{writers: writers} = state
-    {:noreply, %__MODULE__{state | dir: new_dir, writers: [writer_name | writers]}}
+  def handle_info({_task, {:switch_dir_notify, notify}}, state) do
+    {:ok, new_dir, writer, writer_idx} = notify
+    %__MODULE__{writers: writers, q: q} = state
+    may_write_buffer(writer, q)
+    %{s: s, cnt: cnt} = writers
+    writers = %{s: Map.put(s, writer_idx, writer), cnt: cnt + 1}
+    {:noreply, %__MODULE__{state | dir: new_dir, writers: writers}}
   end
 
   def handle_info(_, state), do: {:noreply, state}
@@ -104,10 +115,10 @@ defmodule ExWal.LogWriter.Failover do
   # ----------------- private funcs -----------------
 
   defp switch_dir(new_dir, state)
-  defp switch_dir(_, %__MODULE__{writers: {_, @max_log_writer}} = state), do: {:stop, :normal, state}
+  defp switch_dir(_, %__MODULE__{writers: %{cnt: @max_log_writer}} = state), do: {:stop, :normal, state}
 
-  defp switch_dir(new_dir, %__MODULE__{writers: {_writers, idx}} = state) do
-    %__MODULE__{fs: fs, log_num: log_num, registry: registry} = state
+  defp switch_dir(new_dir, state) do
+    %__MODULE__{fs: fs, log_num: log_num, registry: registry, writers: %{idx: idx}} = state
     # create writer asynchonously
     log_name = Path.join(new_dir, Models.VirtualLog.filename(log_num, idx))
     writer_name = {:via, Registry, {registry, {:writer, log_num, idx}}}
@@ -115,7 +126,7 @@ defmodule ExWal.LogWriter.Failover do
     Task.async(fn ->
       {:ok, file} = FS.create(fs, log_name)
       {:ok, _} = Single.start_link({writer_name, file, log_num})
-      {:switch_dir_notify, {:ok, new_dir, writer_name}}
+      {:switch_dir_notify, {:ok, new_dir, Single.get(writer_name), idx}}
     end)
 
     {:noreply, state}
@@ -128,4 +139,19 @@ defmodule ExWal.LogWriter.Failover do
 
   defp may_log_reason(:normal), do: :pass
   defp may_log_reason(reason), do: Logger.error("FailoverWriter terminate: #{inspect(reason)}")
+
+  defp get_latest_writer(writers)
+  defp get_latest_writer(%{cnt: 0}), do: nil
+
+  defp get_latest_writer(writers) do
+    %{s: s, cnt: cnt} = writers
+    Map.get(s, cnt - 1)
+  end
+
+  defp may_write_buffer(writer, p)
+  defp may_write_buffer(_writer, []), do: :pass
+
+  defp may_write_buffer(writer, p) do
+    LogWriter.write_record(writer, p)
+  end
 end
