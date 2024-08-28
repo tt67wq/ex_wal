@@ -54,8 +54,12 @@ defmodule ExWal.LogWriter.Single do
 
   @impl GenServer
 
-  def terminate(reason, %__MODULE__{name: name}) do
-    Logger.warning("log writer #{inspect(name)} is terminated with reason: #{inspect(reason)}")
+  def terminate(reason, state) do
+    may_log_reason(reason)
+
+    state
+    |> emit_eof_trailer()
+    |> sync_flush()
   end
 
   @impl GenServer
@@ -118,6 +122,12 @@ defmodule ExWal.LogWriter.Single do
     end)
   end
 
+  defp sync_flush(state) do
+    state
+    |> flush()
+    |> Task.await()
+  end
+
   defp emit_fragment(state, n, p)
   defp emit_fragment(state, n, <<>>) when n > 0, do: state
 
@@ -143,6 +153,22 @@ defmodule ExWal.LogWriter.Single do
     state
     |> may_queue_block(block, @block_size - written < @recyclable_header_size)
     |> emit_fragment(n + 1, rest_p)
+  end
+
+  defp emit_eof_trailer(state) do
+    %__MODULE__{block: block, log_num: log_num} = state
+
+    trailer = %Models.RecyclableRecord{
+      crc: 0,
+      size: 0,
+      type: @recyclable_full_chunk_type,
+      log_number: log_num + 1,
+      payload: <<>>
+    }
+
+    Block.append(block, Models.RecyclableRecord.encode(trailer))
+
+    %__MODULE__{state | block: block}
   end
 
   defp may_queue_block(state, block, no_room?)
@@ -171,6 +197,9 @@ defmodule ExWal.LogWriter.Single do
 
   defp written_offset(%__MODULE__{block_num: block_num, block: %Block{written: written}}),
     do: block_num * @block_size + written
+
+  defp may_log_reason(:normal), do: :pass
+  defp may_log_reason(reason), do: Logger.error("Single writer terminate: #{inspect(reason)}")
 end
 
 defimpl ExWal.LogWriter, for: ExWal.LogWriter.Single do

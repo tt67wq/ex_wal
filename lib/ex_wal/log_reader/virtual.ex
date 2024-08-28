@@ -6,16 +6,15 @@ defmodule ExWal.LogReader.Virtual do
 
   @type t :: %__MODULE__{
           name: Agent.name(),
-          dynamic: atom(),
           registry: atom(),
           virtual_log: VirtualLog.t(),
           fs: ExWal.FS.t(),
           reader: ExWal.LogReader.t()
         }
-  defstruct name: nil, dynamic: nil, registry: nil, virtual_log: nil, fs: nil, reader: nil
+  defstruct name: nil, registry: nil, virtual_log: nil, fs: nil, reader: nil
 
-  def start_link({name, dynamic, registry, vlog, fs}) do
-    Agent.start_link(__MODULE__, :init, [name, dynamic, registry, vlog, fs], name: name)
+  def start_link({name, registry, vlog, fs}) do
+    Agent.start_link(__MODULE__, :init, [name, registry, vlog, fs], name: name)
   end
 
   def get(name), do: Agent.get(name, fn state -> state end)
@@ -28,8 +27,8 @@ defmodule ExWal.LogReader.Virtual do
 
   # ---------------- handlers ----------------
 
-  def init(name, dynamic, registry, vlog, fs) do
-    %__MODULE__{name: name, dynamic: dynamic, registry: registry, virtual_log: vlog, fs: fs}
+  def init(name, registry, vlog, fs) do
+    %__MODULE__{name: name, registry: registry, virtual_log: vlog, fs: fs}
   end
 
   def handle_next(state)
@@ -59,13 +58,12 @@ defmodule ExWal.LogReader.Virtual do
   defp next_file(%__MODULE__{reader: nil, virtual_log: %VirtualLog{segments: []}}), do: {:error, :eof}
 
   defp next_file(%__MODULE__{reader: nil} = state) do
-    %__MODULE__{virtual_log: vlog, dynamic: dynamic, registry: registry, fs: fs} = state
+    %__MODULE__{virtual_log: vlog, registry: registry, fs: fs} = state
     %VirtualLog{log_num: log_num, segments: [%Segment{index: index, dir: dir} | segs]} = vlog
     filename = VirtualLog.filename(log_num, index)
     name = {:via, Registry, {registry, {:reader, filename}}}
 
-    {:ok, _} =
-      DynamicSupervisor.start_child(dynamic, {ExWal.LogReader.Single, {name, log_num, Path.join(dir, filename), fs}})
+    {:ok, _} = ExWal.LogReader.Single.start_link({name, log_num, Path.join(dir, filename), fs})
 
     {:ok, %__MODULE__{state | reader: name, virtual_log: %VirtualLog{vlog | segments: segs}}}
   end

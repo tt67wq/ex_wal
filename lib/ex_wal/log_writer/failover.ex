@@ -16,18 +16,21 @@ defmodule ExWal.LogWriter.Failover do
 
   defstruct name: nil,
             registry: nil,
-            dynamic_sup: nil,
             fs: nil,
             dir: "",
             log_num: 0,
-            q: [],
-            writers: {[], 0},
-            logical_offset: 0
+            writers: [],
+            logical_offset: %{
+              offset: 0,
+              latest_writer: nil,
+              latest_log_size: 0,
+              estimated_offset?: false
+            }
 
-  def start_link({name, registry, dynamic_sup, fs, dir, log_num}) do
+  def start_link({name, registry, fs, dir, log_num}) do
     GenServer.start_link(
       __MODULE__,
-      {name, registry, dynamic_sup, fs, dir, log_num},
+      {name, registry, fs, dir, log_num},
       name: name
     )
   end
@@ -39,13 +42,12 @@ defmodule ExWal.LogWriter.Failover do
 
   # ---------------- server -----------------
 
-  def init({name, registry, dynamic_sup, fs, dir, log_num}) do
+  def init({name, registry, fs, dir, log_num}) do
     {
       :ok,
       %__MODULE__{
         name: name,
         registry: registry,
-        dynamic_sup: dynamic_sup,
         fs: fs,
         dir: dir,
         log_num: log_num
@@ -66,21 +68,35 @@ defmodule ExWal.LogWriter.Failover do
   def handle_call({:sync_writes, _} = input, _, %__MODULE__{writers: []} = state) do
     %__MODULE__{logical_offset: logical_offset} = state
     {:sync_writes, p} = input
-    logical_offset = logical_offset + byte_size(p)
-    {:reply, logical_offset, %__MODULE__{state | logical_offset: logical_offset}}
+    %{offset: offset} = logical_offset
+    offset = offset + byte_size(p)
+    {:reply, {:ok, offset}, %__MODULE__{state | logical_offset: %{logical_offset | offset: offset}}}
+  end
+
+  # estimate
+  def handle_call({:sync_writes, _} = input, _, %__MODULE__{logical_offset: %{estimated_offset?: true}} = state) do
+    %__MODULE__{writers: [writer | _], logical_offset: logical_offset} = state
+    {:sync_writes, p} = input
+
+    {:ok, of} = LogWriter.write_record(writer, p)
+    logical_offset = %{logical_offset | offset: of, latest_writer: writer}
+    {:reply, {:ok, of}, %__MODULE__{state | logical_offset: logical_offset}}
   end
 
   def handle_call({:sync_writes, _} = input, _, state) do
-    %__MODULE__{writers: {[writer | _], _}, logical_offset: logical_offset} = state
+    %__MODULE__{writers: [writer | _], logical_offset: logical_offset} = state
     {:sync_writes, p} = input
-    {:ok, offset} = LogWriter.write_record(writer, p)
-    logical_offset = logical_offset + offset
-    {:reply, logical_offset, %__MODULE__{state | logical_offset: logical_offset}}
+    %{latest_log_size: ls, offset: offset} = logical_offset
+
+    {:ok, of} = LogWriter.write_record(writer, p)
+    delta = of - ls
+    logical_offset = %{logical_offset | latest_log_size: of, latest_writer: writer, offset: offset + delta}
+    {:reply, {:ok, logical_offset.offset}, %__MODULE__{state | logical_offset: logical_offset}}
   end
 
-  def handle_info({_task, {:switch_dir, {:ok, new_dir, writer_name}}}, state) do
-    %__MODULE__{writers: {writers, idx}} = state
-    {:noreply, %__MODULE__{state | dir: new_dir, writers: {[writer_name | writers], idx + 1}}}
+  def handle_info({_task, {:switch_dir_notify, {:ok, new_dir, writer_name}}}, state) do
+    %__MODULE__{writers: writers} = state
+    {:noreply, %__MODULE__{state | dir: new_dir, writers: [writer_name | writers]}}
   end
 
   def handle_info(_, state), do: {:noreply, state}
@@ -91,14 +107,15 @@ defmodule ExWal.LogWriter.Failover do
   defp switch_dir(_, %__MODULE__{writers: {_, @max_log_writer}} = state), do: {:stop, :normal, state}
 
   defp switch_dir(new_dir, %__MODULE__{writers: {_writers, idx}} = state) do
-    %__MODULE__{fs: fs, log_num: log_num, registry: registry, dynamic_sup: dsp} = state
+    %__MODULE__{fs: fs, log_num: log_num, registry: registry} = state
     # create writer asynchonously
+    log_name = Path.join(new_dir, Models.VirtualLog.filename(log_num, idx))
+    writer_name = {:via, Registry, {registry, {:writer, log_num, idx}}}
+
     Task.async(fn ->
-      log_name = Path.join(new_dir, Models.VirtualLog.filename(log_num, idx))
-      writer_name = {:via, Registry, {registry, {:writer, log_num, idx}}}
       {:ok, file} = FS.create(fs, log_name)
-      {:ok, _} = DynamicSupervisor.start_child(dsp, {Single, {writer_name, file, log_num}})
-      {:switch_dir, {:ok, new_dir, writer_name}}
+      {:ok, _} = Single.start_link({writer_name, file, log_num})
+      {:switch_dir_notify, {:ok, new_dir, writer_name}}
     end)
 
     {:noreply, state}
