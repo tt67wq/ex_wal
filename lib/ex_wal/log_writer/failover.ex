@@ -23,6 +23,8 @@ defmodule ExWal.LogWriter.Failover do
               s: %{},
               cnt: 0
             },
+            file_create_since: 0,
+            error: nil,
             q: [],
             logical_offset: %{
               offset: 0,
@@ -39,9 +41,22 @@ defmodule ExWal.LogWriter.Failover do
     )
   end
 
+  def get(name), do: %__MODULE__{name: name}
+
+  @spec write_record(name :: GenServer.name(), bytes :: binary()) ::
+          {:ok, written_offset :: non_neg_integer()} | {:error, reason :: any()}
+  def write_record(name, bytes) do
+    GenServer.call(name, {:sync_writes, bytes})
+  end
+
   @spec stop(name :: GenServer.name()) :: :ok | {:error, reason :: any()}
   def stop(name) do
     GenServer.stop(name)
+  end
+
+  @spec latency_and_error(GenServer.name()) :: {latency :: non_neg_integer(), error :: any()}
+  def latency_and_error(name) do
+    GenServer.call(name, :latency_and_error)
   end
 
   # ---------------- server -----------------
@@ -101,14 +116,31 @@ defmodule ExWal.LogWriter.Failover do
     {:reply, {:ok, logical_offset.offset}, %__MODULE__{state | logical_offset: logical_offset}}
   end
 
-  def handle_info({_task, {:switch_dir_notify, notify}}, state) do
-    {:ok, new_dir, writer, writer_idx} = notify
+  def handle_call(:latency_and_error, _, %__MODULE__{file_create_since: 0} = state) do
+    %__MODULE__{error: error} = state
+    {:reply, {0, error}, state}
+  end
+
+  def handle_call(:latency_and_error, _, state) do
+    %__MODULE__{file_create_since: since, error: error} = state
+    {:reply, {System.monotonic_time() - since, error}, state}
+  end
+
+  def handle_info({_task, {:switch_dir_notify, {:ok, _} = notify}}, state) do
+    {:ok, {new_dir, writer, writer_idx}} = notify
     %__MODULE__{writers: writers, q: q, dir: old_dir} = state
     may_write_buffer(writer, q)
+
     %{s: s, cnt: cnt} = writers
     writers = %{s: Map.put(s, writer_idx, writer), cnt: cnt + 1}
     new_dir = if writer_idx >= cnt, do: new_dir, else: old_dir
-    {:noreply, %__MODULE__{state | dir: new_dir, writers: writers}}
+
+    {:noreply, %__MODULE__{state | dir: new_dir, writers: writers, file_create_since: 0, error: nil}}
+  end
+
+  def handle_info({_task, {:switch_dir_notify, {:error, _} = notify}}, state) do
+    {:error, reason} = notify
+    {:noreply, %__MODULE__{state | error: reason, file_create_since: 0}}
   end
 
   def handle_info(_, state), do: {:noreply, state}
@@ -120,17 +152,27 @@ defmodule ExWal.LogWriter.Failover do
 
   defp switch_dir(new_dir, state) do
     %__MODULE__{fs: fs, log_num: log_num, registry: registry, writers: %{idx: idx}} = state
-    # create writer asynchonously
     log_name = Path.join(new_dir, Models.VirtualLog.filename(log_num, idx))
     writer_name = {:via, Registry, {registry, {:writer, log_num, idx}}}
 
+    # create writer asynchonously
     Task.async(fn ->
-      {:ok, file} = FS.create(fs, log_name)
-      {:ok, _} = Single.start_link({writer_name, file, log_num})
-      {:switch_dir_notify, {:ok, new_dir, Single.get(writer_name), idx}}
+      ret =
+        fs
+        |> FS.create(log_name)
+        |> case do
+          {:ok, file} ->
+            {:ok, _} = Single.start_link({writer_name, file, log_num})
+            {:ok, {new_dir, Single.get(writer_name), idx}}
+
+          err ->
+            err
+        end
+
+      {:switch_dir_notify, ret}
     end)
 
-    {:noreply, state}
+    {:noreply, %__MODULE__{state | file_create_since: System.monotonic_time()}}
   end
 
   defp close_writers(state) do
@@ -153,6 +195,21 @@ defmodule ExWal.LogWriter.Failover do
   defp may_write_buffer(_writer, []), do: :pass
 
   defp may_write_buffer(writer, p) do
-    LogWriter.write_record(writer, p)
+    p
+    |> Enum.reverse()
+    |> IO.iodata_to_binary()
+    |> then(fn x -> LogWriter.write_record(writer, x) end)
+  end
+end
+
+defimpl ExWal.LogWriter, for: ExWal.LogWriter.Failover do
+  alias ExWal.LogWriter.Failover
+
+  def write_record(%Failover{name: name}, bytes) do
+    Failover.write_record(name, bytes)
+  end
+
+  def stop(%Failover{name: name}) do
+    Failover.stop(name)
   end
 end
