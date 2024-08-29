@@ -103,10 +103,11 @@ defmodule ExWal.LogWriter.Failover do
 
   def handle_info({_task, {:switch_dir_notify, notify}}, state) do
     {:ok, new_dir, writer, writer_idx} = notify
-    %__MODULE__{writers: writers, q: q} = state
+    %__MODULE__{writers: writers, q: q, dir: old_dir} = state
     may_write_buffer(writer, q)
     %{s: s, cnt: cnt} = writers
     writers = %{s: Map.put(s, writer_idx, writer), cnt: cnt + 1}
+    new_dir = if writer_idx >= cnt, do: new_dir, else: old_dir
     {:noreply, %__MODULE__{state | dir: new_dir, writers: writers}}
   end
 
