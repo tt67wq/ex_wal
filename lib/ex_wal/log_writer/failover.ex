@@ -54,7 +54,7 @@ defmodule ExWal.LogWriter.Failover do
     GenServer.stop(name)
   end
 
-  @spec latency_and_error(GenServer.name()) :: {latency :: non_neg_integer(), error :: any()}
+  @spec latency_and_error(GenServer.name()) :: {latency_milli :: non_neg_integer(), error :: any()}
   def latency_and_error(name) do
     GenServer.call(name, :latency_and_error)
   end
@@ -123,7 +123,8 @@ defmodule ExWal.LogWriter.Failover do
 
   def handle_call(:latency_and_error, _, state) do
     %__MODULE__{file_create_since: since, error: error} = state
-    {:reply, {System.monotonic_time() - since, error}, state}
+    latency_milli = (System.monotonic_time() - since) |> System.convert_time_unit(:nanosecond, :millisecond)
+    {:reply, {latency_milli, error}, state}
   end
 
   def handle_info({_task, {:switch_dir_notify, {:ok, _} = notify}}, state) do
