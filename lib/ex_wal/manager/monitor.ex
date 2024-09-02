@@ -1,9 +1,15 @@
+defmodule ExWal.Manager.DirAndFile do
+  @moduledoc false
+  defstruct dir: "", error_cnt: 0
+end
+
 defmodule ExWal.Manager.Monitor do
   @moduledoc false
 
   use GenServer
 
   alias ExWal.LogWriter.Failover
+  alias ExWal.Manager.DirAndFile
 
   require Logger
 
@@ -11,18 +17,20 @@ defmodule ExWal.Manager.Monitor do
   @unhealthy_threashold 100
 
   defstruct name: nil,
+            last_fall_at: 0,
             dirs: %{
-              type: :primary,
-              primary: %{
+              primary: %DirAndFile{
+                dir: "",
                 error_cnt: 0
               },
-              secondary: %{
+              secondary: %DirAndFile{
+                dir: "",
                 error_cnt: 0
               }
             },
-            last_fall_at: 0,
             writer: %{
               w: nil,
+              type: :primary,
               latency_at_switch: 0,
               num_switch: 0
             }
@@ -44,11 +52,17 @@ defmodule ExWal.Manager.Monitor do
     {:noreply, state, @unhealthy_sampling_interval}
   end
 
+  def handle_info(:timeout, %{writer: %{w: nil}} = state) do
+    {:noreply, state, @unhealthy_sampling_interval}
+  end
+
   def handle_info(:timeout, state) do
     %__MODULE__{writer: writer, dirs: dirs} = state
     %{w: %Failover{name: name}} = writer
     {latency, error} = Failover.latency_and_error(name)
-    switchable?(latency, error, dirs)
+    {switch?, state} = switchable?(latency, error, dirs)
+
+    {:noreply, may_switch(switch?, state), @unhealthy_sampling_interval}
   end
 
   def terminate(reason, _state) do
@@ -60,7 +74,11 @@ defmodule ExWal.Manager.Monitor do
 
   defp switchable?(latency, error, state)
 
-  defp switchable?(_latency, _error, %__MODULE__{dirs: %{type: :primary, secondary: %{error_cnt: x}}} = state)
+  defp switchable?(
+         _latency,
+         _error,
+         %__MODULE__{writer: %{type: :primary}, dirs: %{secondary: %DirAndFile{error_cnt: x}}} = state
+       )
        when x >= 2,
        do: {false, state}
 
@@ -75,4 +93,26 @@ defmodule ExWal.Manager.Monitor do
       {false, state}
     end
   end
+
+  defp switchable?(_latency, _error, state) do
+    %__MODULE__{dirs: dirs, writer: %{type: type}} = state
+    i = %DirAndFile{error_cnt: c} = dirs[type]
+    dirs = Map.put(dirs, type, %{i | error_cnt: c + 1})
+    {true, %__MODULE__{state | dirs: dirs}}
+  end
+
+  defp may_switch(switch?, state)
+  defp may_switch(false, state), do: state
+
+  defp may_switch(true, state) do
+    %__MODULE__{writer: writer, dirs: dirs} = state
+    %{w: %Failover{name: n}, type: type, num_switch: ns} = writer
+    writer = %{writer | type: switch_type(type), num_switch: ns + 1}
+    %DirAndFile{dir: dir} = Map.get(dirs, type)
+    :ok = Failover.switch_dir(n, dir)
+    %__MODULE__{state | writer: writer}
+  end
+
+  defp switch_type(:primary), do: :secondary
+  defp switch_type(:secondary), do: :primary
 end

@@ -59,6 +59,9 @@ defmodule ExWal.LogWriter.Failover do
     GenServer.call(name, :latency_and_error)
   end
 
+  @spec switch_dir(name :: GenServer.name(), new_dir :: binary()) :: :ok
+  def switch_dir(name, new_dir), do: GenServer.call(name, {:switch_dir, new_dir})
+
   # ---------------- server -----------------
 
   def init({name, registry, fs, dir, log_num}) do
@@ -81,7 +84,28 @@ defmodule ExWal.LogWriter.Failover do
   end
 
   def handle_continue({:switch_dir, dir}, state) do
-    switch_dir(dir, state)
+    dir
+    |> do_switch_dir(state)
+    |> case do
+      {:ok, state} ->
+        {:noreply, state}
+
+      {{:error, reason}, state} ->
+        {:stop, reason, state}
+    end
+  end
+
+  def handle_call({:switch_dir, dir}, _, state) do
+    # {:reply, :ok, }
+    dir
+    |> do_switch_dir(state)
+    |> case do
+      {:ok, state} ->
+        {:reply, :ok, state}
+
+      {{:error, reason}, state} ->
+        {:stop, reason, state}
+    end
   end
 
   def handle_call({:sync_writes, _} = input, _, %__MODULE__{writers: %{cnt: 0}} = state) do
@@ -123,7 +147,7 @@ defmodule ExWal.LogWriter.Failover do
 
   def handle_call(:latency_and_error, _, state) do
     %__MODULE__{file_create_since: since, error: error} = state
-    latency_milli = (System.monotonic_time() - since) |> System.convert_time_unit(:nanosecond, :millisecond)
+    latency_milli = System.convert_time_unit(System.monotonic_time() - since, :nanosecond, :millisecond)
     {:reply, {latency_milli, error}, state}
   end
 
@@ -148,10 +172,10 @@ defmodule ExWal.LogWriter.Failover do
 
   # ----------------- private funcs -----------------
 
-  defp switch_dir(new_dir, state)
-  defp switch_dir(_, %__MODULE__{writers: %{cnt: @max_log_writer}} = state), do: {:stop, :normal, state}
+  defp do_switch_dir(new_dir, state)
+  defp do_switch_dir(_, %__MODULE__{writers: %{cnt: @max_log_writer}} = state), do: {{:error, :normal}, state}
 
-  defp switch_dir(new_dir, state) do
+  defp do_switch_dir(new_dir, state) do
     %__MODULE__{fs: fs, log_num: log_num, registry: registry, writers: %{idx: idx}} = state
     log_name = Path.join(new_dir, Models.VirtualLog.filename(log_num, idx))
     writer_name = {:via, Registry, {registry, {:writer, log_num, idx}}}
@@ -173,7 +197,7 @@ defmodule ExWal.LogWriter.Failover do
       {:switch_dir_notify, ret}
     end)
 
-    {:noreply, %__MODULE__{state | file_create_since: System.monotonic_time()}}
+    {:ok, %__MODULE__{state | file_create_since: System.monotonic_time()}}
   end
 
   defp close_writers(state) do
