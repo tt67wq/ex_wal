@@ -1,23 +1,23 @@
-defmodule ExWal.Manager.DirAndFile do
+defmodule ExWal.Monitor.DirAndFile do
   @moduledoc false
   defstruct dir: "", error_cnt: 0
 end
 
-defmodule ExWal.Manager.Monitor do
+defmodule ExWal.Monitor do
   @moduledoc false
 
-  use GenServer
+  use GenServer, restart: :transient
 
   alias ExWal.LogWriter.Failover
-  alias ExWal.Manager.DirAndFile
+  alias ExWal.Monitor.DirAndFile
+  alias ExWal.Obeserver
 
   require Logger
 
   @unhealthy_sampling_interval 100
   @unhealthy_threashold 100
 
-  defstruct name: nil,
-            last_fall_at: 0,
+  defstruct last_fall_at: 0,
             dirs: %{
               primary: %DirAndFile{
                 dir: "",
@@ -28,6 +28,7 @@ defmodule ExWal.Manager.Monitor do
                 error_cnt: 0
               }
             },
+            observer: nil,
             writer: %{
               w: nil,
               type: :primary,
@@ -35,17 +36,23 @@ defmodule ExWal.Manager.Monitor do
               num_switch: 0
             }
 
-  def start_link({name, dirs}) do
-    GenServer.start_link(__MODULE__, {name, dirs}, name: name)
+  def start_link({dirs, observer}) do
+    GenServer.start_link(__MODULE__, {dirs, observer})
   end
 
-  def stop(name) do
-    GenServer.stop(name)
-  end
+  def stop(p), do: GenServer.stop(p)
+
+  def new_writer(p, writer_creator_fn), do: GenServer.call(p, {:new_writer, writer_creator_fn})
+
+  def no_writer(p), do: GenServer.call(p, :no_writer)
 
   # ---------------- server ---------------
-  def init({name, dirs}) do
-    {:ok, %__MODULE__{name: name, dirs: dirs}, @unhealthy_sampling_interval}
+  def init({dirs, observer}) do
+    {:ok, %__MODULE__{dirs: dirs, observer: observer}, @unhealthy_sampling_interval}
+  end
+
+  def terminate(reason, _state) do
+    may_log_reason(reason)
   end
 
   def handle_info(:timeout, %{writer: nil} = state) do
@@ -57,16 +64,30 @@ defmodule ExWal.Manager.Monitor do
   end
 
   def handle_info(:timeout, state) do
-    %__MODULE__{writer: writer, dirs: dirs} = state
-    %{w: %Failover{name: name}} = writer
-    {latency, error} = Failover.latency_and_error(name)
+    %__MODULE__{dirs: dirs, observer: ob} = state
+    {latency, error} = Obeserver.stats(ob)
     {switch?, state} = switchable?(latency, error, dirs)
 
     {:noreply, may_switch(switch?, state), @unhealthy_sampling_interval}
   end
 
-  def terminate(reason, _state) do
-    may_log_reason(reason)
+  def handle_call({:new_writer, _}, _from, %__MODULE__{writer: %{w: w}}) when not is_nil(w) do
+    raise ExWal.Exception, message: "previous writer not closed"
+  end
+
+  def handle_call({:new_writer, writer_creator_fn}, _from, state) do
+    %__MODULE__{writer: writer, dirs: dirs} = state
+    %{type: type} = writer
+    %DirAndFile{dir: dir} = Map.fetch!(dirs, type)
+    writer = %{writer | w: writer_creator_fn.(dir)}
+
+    {:reply, :ok, %__MODULE__{state | writer: writer}}
+  end
+
+  def handle_call(:no_writer, _, state) do
+    %__MODULE__{writer: writer} = state
+    writer = %{writer | w: nil}
+    {:reply, :ok, %__MODULE__{state | writer: writer}}
   end
 
   defp may_log_reason(:normal), do: :pass

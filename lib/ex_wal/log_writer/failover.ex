@@ -1,3 +1,8 @@
+defmodule ExWal.LogWriter.Failover.LogicalOffset do
+  @moduledoc false
+  defstruct offset: 0, latest_log_size: 0, estimated_offset?: false
+end
+
 defmodule ExWal.LogWriter.Failover do
   @moduledoc """
   FailoverWriter is the implementation of LogWriter in failover mode.
@@ -7,8 +12,10 @@ defmodule ExWal.LogWriter.Failover do
 
   alias ExWal.FS
   alias ExWal.LogWriter
+  alias ExWal.LogWriter.Failover.LogicalOffset
   alias ExWal.LogWriter.Single
   alias ExWal.Models
+  alias ExWal.Obeserver
 
   require Logger
 
@@ -23,20 +30,18 @@ defmodule ExWal.LogWriter.Failover do
               s: %{},
               cnt: 0
             },
-            file_create_since: 0,
-            error: nil,
             q: [],
-            logical_offset: %{
+            observer: nil,
+            logical_offset: %LogicalOffset{
               offset: 0,
-              latest_writer: nil,
               latest_log_size: 0,
               estimated_offset?: false
             }
 
-  def start_link({name, registry, fs, dir, log_num}) do
+  def start_link({name, registry, fs, dir, log_num, observer}) do
     GenServer.start_link(
       __MODULE__,
-      {name, registry, fs, dir, log_num},
+      {name, registry, fs, dir, log_num, observer},
       name: name
     )
   end
@@ -54,17 +59,12 @@ defmodule ExWal.LogWriter.Failover do
     GenServer.stop(name)
   end
 
-  @spec latency_and_error(GenServer.name()) :: {latency_milli :: non_neg_integer(), error :: any()}
-  def latency_and_error(name) do
-    GenServer.call(name, :latency_and_error)
-  end
-
   @spec switch_dir(name :: GenServer.name(), new_dir :: binary()) :: :ok
   def switch_dir(name, new_dir), do: GenServer.call(name, {:switch_dir, new_dir})
 
   # ---------------- server -----------------
 
-  def init({name, registry, fs, dir, log_num}) do
+  def init({name, registry, fs, dir, log_num, observer}) do
     {
       :ok,
       %__MODULE__{
@@ -72,7 +72,8 @@ defmodule ExWal.LogWriter.Failover do
         registry: registry,
         fs: fs,
         dir: dir,
-        log_num: log_num
+        log_num: log_num,
+        observer: observer
       },
       {:continue, {:switch_dir, dir}}
     }
@@ -114,41 +115,77 @@ defmodule ExWal.LogWriter.Failover do
     %{offset: offset} = logical_offset
     offset = offset + byte_size(p)
 
-    {:reply, {:ok, offset}, %__MODULE__{state | logical_offset: %{logical_offset | offset: offset}, q: [p | q]}}
+    {
+      :reply,
+      {:ok, offset},
+      %__MODULE__{state | logical_offset: %LogicalOffset{logical_offset | offset: offset}, q: [p | q]}
+    }
   end
 
   # estimate
-  def handle_call({:sync_writes, _} = input, _, %__MODULE__{logical_offset: %{estimated_offset?: true}} = state) do
-    %__MODULE__{writers: writers, logical_offset: logical_offset} = state
+  def handle_call(
+        {:sync_writes, _} = input,
+        _,
+        %__MODULE__{logical_offset: %LogicalOffset{estimated_offset?: true}} = state
+      ) do
+    %__MODULE__{writers: writers, logical_offset: logical_offset, observer: ob} = state
     writer = get_latest_writer(writers)
     {:sync_writes, p} = input
 
-    {:ok, of} = LogWriter.write_record(writer, p)
-    logical_offset = %{logical_offset | offset: of, latest_writer: writer}
-    {:reply, {:ok, of}, %__MODULE__{state | logical_offset: logical_offset}}
+    Obeserver.record_start(ob)
+
+    writer
+    |> LogWriter.write_record(p)
+    |> case do
+      {:ok, of} ->
+        Obeserver.record_end(ob, nil)
+
+        {
+          :reply,
+          {:ok, of},
+          %__MODULE__{state | logical_offset: %LogicalOffset{logical_offset | offset: of}}
+        }
+
+      {:error, reason} ->
+        Obeserver.record_end(ob, reason)
+
+        {:reply, {:error, reason}, state}
+    end
   end
 
   def handle_call({:sync_writes, _} = input, _, state) do
-    %__MODULE__{writers: writers, logical_offset: logical_offset} = state
+    %__MODULE__{writers: writers, logical_offset: logical_offset, observer: ob} = state
     writer = get_latest_writer(writers)
     {:sync_writes, p} = input
-    %{latest_log_size: ls, offset: offset} = logical_offset
+    %LogicalOffset{latest_log_size: ls, offset: offset} = logical_offset
 
-    {:ok, of} = LogWriter.write_record(writer, p)
-    delta = of - ls
-    logical_offset = %{logical_offset | latest_log_size: of, latest_writer: writer, offset: offset + delta}
-    {:reply, {:ok, logical_offset.offset}, %__MODULE__{state | logical_offset: logical_offset}}
-  end
+    Obeserver.record_start(ob)
 
-  def handle_call(:latency_and_error, _, %__MODULE__{file_create_since: 0} = state) do
-    %__MODULE__{error: error} = state
-    {:reply, {0, error}, state}
-  end
+    writer
+    |> LogWriter.write_record(p)
+    |> case do
+      {:ok, of} ->
+        Obeserver.record_end(ob, nil)
+        delta = of - ls
 
-  def handle_call(:latency_and_error, _, state) do
-    %__MODULE__{file_create_since: since, error: error} = state
-    latency_milli = System.convert_time_unit(System.monotonic_time() - since, :nanosecond, :millisecond)
-    {:reply, {latency_milli, error}, state}
+        {
+          :reply,
+          {:ok, logical_offset.offset},
+          %__MODULE__{
+            state
+            | logical_offset: %LogicalOffset{
+                logical_offset
+                | latest_log_size: of,
+                  offset: offset + delta,
+                  estimated_offset?: true
+              }
+          }
+        }
+
+      {:error, reason} ->
+        Obeserver.record_end(ob, reason)
+        {:reply, {:error, reason}, state}
+    end
   end
 
   def handle_info({_task, {:switch_dir_notify, {:ok, _} = notify}}, state) do
@@ -160,12 +197,12 @@ defmodule ExWal.LogWriter.Failover do
     writers = %{s: Map.put(s, writer_idx, writer), cnt: cnt + 1}
     new_dir = if writer_idx >= cnt, do: new_dir, else: old_dir
 
-    {:noreply, %__MODULE__{state | dir: new_dir, writers: writers, file_create_since: 0, error: nil}}
+    {:noreply, %__MODULE__{state | dir: new_dir, writers: writers}}
   end
 
-  def handle_info({_task, {:switch_dir_notify, {:error, _} = notify}}, state) do
-    {:error, reason} = notify
-    {:noreply, %__MODULE__{state | error: reason, file_create_since: 0}}
+  def handle_info({_task, {:switch_dir_notify, {:error, _} = _notify}}, state) do
+    # {:error, reason} = notify
+    {:noreply, state}
   end
 
   def handle_info(_, state), do: {:noreply, state}
@@ -197,7 +234,7 @@ defmodule ExWal.LogWriter.Failover do
       {:switch_dir_notify, ret}
     end)
 
-    {:ok, %__MODULE__{state | file_create_since: System.monotonic_time()}}
+    {:ok, state}
   end
 
   defp close_writers(state) do
