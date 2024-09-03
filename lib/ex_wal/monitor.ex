@@ -1,6 +1,11 @@
 defmodule ExWal.Monitor.DirAndFile do
   @moduledoc false
   defstruct dir: "", error_cnt: 0
+
+  @type t :: %__MODULE__{
+          dir: String.t(),
+          error_cnt: non_neg_integer()
+        }
 end
 
 defmodule ExWal.Monitor do
@@ -18,7 +23,7 @@ defmodule ExWal.Monitor do
   @unhealthy_threashold 100
 
   defstruct last_fall_at: 0,
-            dirs: %{
+            dirs: [
               primary: %DirAndFile{
                 dir: "",
                 error_cnt: 0
@@ -27,7 +32,7 @@ defmodule ExWal.Monitor do
                 dir: "",
                 error_cnt: 0
               }
-            },
+            ],
             observer: nil,
             writer: %{
               w: nil,
@@ -36,14 +41,25 @@ defmodule ExWal.Monitor do
               num_switch: 0
             }
 
+  @spec start_link({
+          dirs :: [primary: DirAndFile.t(), secondary: DirAndFile.t()],
+          observer :: pid() | GenServer.name()
+        }) ::
+          GenServer.on_start()
   def start_link({dirs, observer}) do
     GenServer.start_link(__MODULE__, {dirs, observer})
   end
 
   def stop(p), do: GenServer.stop(p)
 
+  @spec new_writer(
+          p :: pid(),
+          writer_creator_fn :: (dir :: String.t() -> writer :: ExWal.LogWriter.t())
+        ) ::
+          :ok | {:error, reason :: any()}
   def new_writer(p, writer_creator_fn), do: GenServer.call(p, {:new_writer, writer_creator_fn})
 
+  @spec no_writer(p :: pid()) :: :ok | {:error, reason :: any()}
   def no_writer(p), do: GenServer.call(p, :no_writer)
 
   # ---------------- server ---------------
@@ -78,7 +94,7 @@ defmodule ExWal.Monitor do
   def handle_call({:new_writer, writer_creator_fn}, _from, state) do
     %__MODULE__{writer: writer, dirs: dirs} = state
     %{type: type} = writer
-    %DirAndFile{dir: dir} = Map.fetch!(dirs, type)
+    %DirAndFile{dir: dir} = dirs[type]
     writer = %{writer | w: writer_creator_fn.(dir)}
 
     {:reply, :ok, %__MODULE__{state | writer: writer}}
@@ -98,7 +114,7 @@ defmodule ExWal.Monitor do
   defp switchable?(
          _latency,
          _error,
-         %__MODULE__{writer: %{type: :primary}, dirs: %{secondary: %DirAndFile{error_cnt: x}}} = state
+         %__MODULE__{writer: %{type: :primary}, dirs: [_, secondary: %DirAndFile{error_cnt: x}]} = state
        )
        when x >= 2,
        do: {false, state}
@@ -118,7 +134,7 @@ defmodule ExWal.Monitor do
   defp switchable?(_latency, _error, state) do
     %__MODULE__{dirs: dirs, writer: %{type: type}} = state
     i = %DirAndFile{error_cnt: c} = dirs[type]
-    dirs = Map.put(dirs, type, %{i | error_cnt: c + 1})
+    dirs = Keyword.put(dirs, type, %DirAndFile{i | error_cnt: c + 1})
     {true, %__MODULE__{state | dirs: dirs}}
   end
 
@@ -129,7 +145,7 @@ defmodule ExWal.Monitor do
     %__MODULE__{writer: writer, dirs: dirs} = state
     %{w: %Failover{name: n}, type: type, num_switch: ns} = writer
     writer = %{writer | type: switch_type(type), num_switch: ns + 1}
-    %DirAndFile{dir: dir} = Map.get(dirs, type)
+    %DirAndFile{dir: dir} = dirs[type]
     :ok = Failover.switch_dir(n, dir)
     %__MODULE__{state | writer: writer}
   end

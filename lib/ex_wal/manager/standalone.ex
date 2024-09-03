@@ -4,6 +4,7 @@ defmodule ExWal.Manager.Standalone do
   use GenServer, restart: :transient
 
   alias ExWal.FS
+  alias ExWal.Manager.Options
   alias ExWal.Models
   alias ExWal.Recycler
 
@@ -22,13 +23,16 @@ defmodule ExWal.Manager.Standalone do
   @spec start_link({
           name :: GenServer.name(),
           recycler :: ExWal.Recycler.t(),
-          dynamic_sup :: atom(),
-          registry :: atom(),
-          fs :: ExWal.FS.t(),
-          dirname :: binary()
+          dynamic_sup :: GenServer.name(),
+          registry :: GenServer.name(),
+          opts :: Options.t()
         }) :: GenServer.on_start()
-  def start_link({name, recycler, dynamic_sup, registry, fs, dirname}) do
-    GenServer.start_link(__MODULE__, {name, recycler, dynamic_sup, registry, fs, dirname}, name: name)
+  def start_link({name, recycler, dynamic_sup, registry, opts}) do
+    GenServer.start_link(
+      __MODULE__,
+      {name, recycler, dynamic_sup, registry, opts},
+      name: name
+    )
   end
 
   @spec stop(GenServer.name()) :: :ok | {:error, reason :: any()}
@@ -69,21 +73,29 @@ defmodule ExWal.Manager.Standalone do
   # --------------------- server -----------------
 
   @impl GenServer
-  def init({name, recycler, dynamic_sup, registry, fs, dirname}) do
+  def init({name, recycler, dynamic_sup, registry, opts}) do
+    %Options{primary: primary} = opts
+
     {:ok,
      %__MODULE__{
        name: name,
        recycler: recycler,
        dynamic_sup: dynamic_sup,
        registry: registry,
-       fs: fs,
-       dirname: dirname
-     }, {:continue, :initialize}}
+       fs: primary[:fs],
+       dirname: primary[:dir]
+     }, {:continue, {:initialize, opts}}}
   end
 
   @impl GenServer
-  def handle_continue(:initialize, state) do
+  def handle_continue({:initialize, opts}, state) do
     %__MODULE__{dirname: dirname, fs: fs, recycler: recycler} = state
+
+    with do
+      %Options{max_num_recyclable_logs: ml} = opts
+      :ok = Recycler.initialize(recycler, ml)
+    end
+
     :ok = FS.mkdir_all(fs, dirname)
     {:ok, files} = FS.list(fs, dirname)
 

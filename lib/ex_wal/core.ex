@@ -4,26 +4,26 @@ defmodule ExWal.Core do
   use Agent
 
   alias ExWal.Manager
+  alias ExWal.Recycler
 
   @type t :: %__MODULE__{
           name: Agent.name(),
           dynamic_sup: atom(),
           registry: atom(),
-          recycler: atom(),
           fs: ExWal.FS.t()
         }
 
-  defstruct name: nil, dynamic_sup: nil, registry: nil, recycler: nil, fs: nil
+  defstruct name: nil, dynamic_sup: nil, registry: nil, fs: nil
 
-  @spec start_link({
-          name :: Agent.name(),
-          dynamic_sup :: atom(),
-          registry :: atom(),
-          recycler :: atom(),
-          fs :: ExWal.FS.t()
-        }) :: Agent.on_start()
-  def start_link({name, dynamic_sup, registry, recycler, fs}) do
-    Agent.start_link(__MODULE__, :init, [{name, dynamic_sup, registry, recycler, fs}], name: name)
+  # @spec start_link({
+  #         name :: Agent.name(),
+  #         dynamic_sup :: atom(),
+  #         registry :: atom(),
+  #         recycler :: atom(),
+  #         fs :: ExWal.FS.t()
+  #       }) :: Agent.on_start()
+  def start_link({name, dynamic_sup, registry, fs}) do
+    Agent.start_link(__MODULE__, :init, [{name, dynamic_sup, registry, fs}], name: name)
   end
 
   @spec manager(
@@ -38,8 +38,8 @@ defmodule ExWal.Core do
 
   # ---------------- handler -----------------
 
-  def init({name, dynamic_sup, registry, recycler, fs}) do
-    %__MODULE__{name: name, dynamic_sup: dynamic_sup, registry: registry, recycler: recycler, fs: fs}
+  def init({name, dynamic_sup, registry, fs}) do
+    %__MODULE__{name: name, dynamic_sup: dynamic_sup, registry: registry, fs: fs}
   end
 
   def handle_manager(state, dirname, mode)
@@ -48,13 +48,20 @@ defmodule ExWal.Core do
     %__MODULE__{
       registry: registry,
       dynamic_sup: dynamic_sup,
-      recycler: recycler,
       fs: fs
     } = state
 
     # start sub registry
     sub_registry = {:via, Registry, {registry, {:manager_registry, dirname}}}
     {:ok, _} = DynamicSupervisor.start_child(dynamic_sup, {Registry, name: sub_registry})
+
+    # recycler
+    recycler =
+      with do
+        rn = {:via, Registry, {registry, {:recycler, dirname}}}
+        {:ok, _} = Recycler.ETS.start_link(rn)
+        Recycler.ETS.get(rn)
+      end
 
     manager_name = {:via, Registry, {registry, {:manager, dirname}}}
 
@@ -68,8 +75,7 @@ defmodule ExWal.Core do
             recycler,
             dynamic_sup,
             sub_registry,
-            fs,
-            dirname
+            %Manager.Options{primary: [fs: fs, dir: dirname]}
           }
         }
       )

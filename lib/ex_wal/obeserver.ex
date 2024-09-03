@@ -5,8 +5,15 @@ defmodule ExWal.Obeserver do
 
   defstruct latency: 0, error: nil
 
-  def start_link(_) do
-    Agent.start_link(fn -> %__MODULE__{latency: 0, error: nil} end, name: __MODULE__)
+  @type t :: %__MODULE__{
+          latency: non_neg_integer(),
+          error: any()
+        }
+
+  @type p :: GenServer.name() | pid()
+
+  def start_link(name) do
+    Agent.start_link(fn -> %__MODULE__{latency: 0, error: nil} end, name: name)
   end
 
   def record_start(p) do

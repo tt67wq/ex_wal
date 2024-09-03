@@ -10,6 +10,9 @@ defprotocol ExWal.Recycler do
   """
   @type log_num :: ExWal.Models.VirtualLog.log_num()
 
+  @spec initialize(impl :: t(), capacity :: non_neg_integer()) :: :ok
+  def initialize(impl, capacity)
+
   @spec add(impl :: t(), log_num :: log_num()) :: boolean()
   def add(impl, log_num)
 
@@ -54,36 +57,43 @@ defmodule ExWal.Recycler.ETS do
           name: Agent.name()
         }
 
+  @type p :: GenServer.name() | pid()
+
   defstruct name: nil, logs: [], size: 0, capacity: 64, min: 0, max: 0
 
   def start_link(name) do
     Agent.start_link(__MODULE__, :init, [name], name: name)
   end
 
-  @spec get(name :: atom()) :: t()
+  @spec get(name :: p()) :: t()
   def get(name), do: Agent.get(name, fn state -> state end)
 
-  @spec add(name :: atom(), log_num :: log_num()) :: boolean()
+  @spec initialize(name :: p(), capacity :: non_neg_integer()) :: :ok
+  def initialize(name, capacity) do
+    Agent.get_and_update(name, __MODULE__, :handle_initialize, [capacity])
+  end
+
+  @spec add(name :: p(), log_num :: log_num()) :: boolean()
   def add(name, log_num) do
     Agent.get_and_update(name, __MODULE__, :handle_add, [log_num])
   end
 
-  @spec set_min(name :: atom(), log_num :: log_num()) :: :ok
+  @spec set_min(name :: p(), log_num :: log_num()) :: :ok
   def set_min(name, log_num) do
     Agent.get_and_update(name, __MODULE__, :handle_set_min, [log_num])
   end
 
-  @spec get_min(name :: atom()) :: log_num()
+  @spec get_min(name :: p()) :: log_num()
   def get_min(name) do
     Agent.get(name, __MODULE__, :handle_get_min, [])
   end
 
-  @spec peek(name :: atom()) :: log_num() | nil
+  @spec peek(name :: p()) :: log_num() | nil
   def peek(name) do
     Agent.get(name, __MODULE__, :handle_peek, [])
   end
 
-  @spec pop(name :: atom()) :: log_num() | nil
+  @spec pop(name :: p()) :: log_num() | nil
   def pop(name) do
     Agent.get_and_update(name, __MODULE__, :handle_pop, [])
   end
@@ -92,6 +102,10 @@ defmodule ExWal.Recycler.ETS do
 
   def init(name) do
     %__MODULE__{name: name, logs: []}
+  end
+
+  def handle_initialize(state, capacity) do
+    {:ok, %__MODULE__{state | capacity: capacity}}
   end
 
   def handle_add(state, log_num)
@@ -135,15 +149,14 @@ defmodule ExWal.Recycler.ETS do
     %__MODULE__{logs: [log_num | logs], size: size} = state
     {log_num, %__MODULE__{state | logs: logs, size: size - 1}}
   end
-
-  # defp add_able?(%__MODULE__{size: size, capacity: capacity}, _) when size >= capacity, do: false
-  # defp add_able?(%__MODULE__{min: min}, log_num) when log_num < min, do: false
-  # defp add_able?(%__MODULE__{max: max}, log_num) when log_num <= max, do: false
-  # defp add_able?(_, _), do: true
 end
 
 defimpl ExWal.Recycler, for: ExWal.Recycler.ETS do
   alias ExWal.Recycler.ETS
+
+  def initialize(%ETS{name: name}, capacity) do
+    ETS.initialize(name, capacity)
+  end
 
   def add(%ETS{name: name}, log_num) do
     ETS.add(name, log_num)
