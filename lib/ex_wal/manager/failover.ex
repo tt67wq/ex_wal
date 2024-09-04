@@ -90,22 +90,19 @@ defmodule ExWal.Manager.Failover do
     end
 
     # init primary
-    with do
-      %Options{primary: [fs: fs, dir: dir]} = opts
-      :ok = FS.mkdir_all(fs, dir)
-      {:ok, files} = FS.list(fs, dir)
+    init_obsolete_primary =
+      with do
+        %Options{primary: [fs: fs, dir: dir]} = opts
+        init_recycler_and_obsolete(fs, dir, recycler)
+      end
 
-      files
-      |> Enum.map(fn f -> Models.VirtualLog.parse_filename(f) end)
-      |> Enum.each(fn {log_num, _} ->
-        recycler
-        |> Recycler.get_min()
-        |> Kernel.<=(log_num)
-        |> if do
-          Recycler.set_min(recycler, log_num + 1)
-        end
-      end)
-    end
+    init_obsolete_secondary =
+      with do
+        %Options{secondary: [fs: fs, dir: dir]} = opts
+        init_recycler_and_obsolete(fs, dir, recycler)
+      end
+
+    {:noreply, %__MODULE__{state | init_obsolete: init_obsolete_primary ++ init_obsolete_secondary}}
   end
 
   defp test_secondary_dir(fs: fs, dir: dir) do
@@ -122,5 +119,38 @@ defmodule ExWal.Manager.Failover do
 
   defp test_file(file) do
     ExWal.File.write(file, "secondary: #{Path.dirname(file)}\nprocess start: #{System.system_time()}\n")
+  end
+
+  defp init_recycler_and_obsolete(fs, dir, recycler) do
+    :ok = FS.mkdir_all(fs, dir)
+    {:ok, files} = FS.list(fs, dir)
+
+    init_recycler(files, recycler)
+    init_obsolete(files, fs, dir)
+  end
+
+  defp init_recycler(files, recycler) do
+    files
+    |> Enum.map(fn f -> Models.VirtualLog.parse_filename(f) end)
+    |> Enum.uniq_by(fn {log_num, _} -> log_num end)
+    |> Enum.each(fn {log_num, _} ->
+      recycler
+      |> Recycler.get_min()
+      |> Kernel.<=(log_num)
+      |> if do
+        Recycler.set_min(recycler, log_num + 1)
+      end
+    end)
+  end
+
+  defp init_obsolete(files, fs, dir) do
+    files
+    |> Enum.map(fn f -> Models.VirtualLog.parse_filename(f) end)
+    |> Enum.map(fn {log_num, index} ->
+      %Models.Deletable{
+        fs: fs,
+        path: Path.join(dir, Models.VirtualLog.filename(log_num, index))
+      }
+    end)
   end
 end
