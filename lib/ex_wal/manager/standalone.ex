@@ -6,6 +6,8 @@ defmodule ExWal.Manager.Standalone do
   alias ExWal.FS
   alias ExWal.Manager.Options
   alias ExWal.Models
+  alias ExWal.Models.Deletable
+  alias ExWal.Models.VirtualLog
   alias ExWal.Recycler
 
   @type t :: %__MODULE__{
@@ -15,10 +17,18 @@ defmodule ExWal.Manager.Standalone do
           registry: atom(),
           fs: ExWal.FS.t(),
           dirname: binary(),
-          queue: [Models.VirtualLog.log_num()]
+          queue: [Models.VirtualLog.t()],
+          initial_obsolete: [Models.Deletable.t()]
         }
 
-  defstruct name: nil, recycler: nil, dynamic_sup: nil, registry: nil, fs: nil, dirname: "", queue: []
+  defstruct name: nil,
+            recycler: nil,
+            dynamic_sup: nil,
+            registry: nil,
+            fs: nil,
+            dirname: "",
+            queue: [],
+            initial_obsolete: []
 
   @spec start_link({
           name :: GenServer.name(),
@@ -54,7 +64,7 @@ defmodule ExWal.Manager.Standalone do
           min_log_num :: ExWal.Models.VirtualLog.log_num(),
           recycle? :: boolean()
         ) ::
-          :ok | {:error, reason :: any()}
+          {:ok, [Deletable.t()]} | {:error, reason :: any()}
   def obsolete(name, min_log_num, recycle?) do
     GenServer.call(name, {:obsolete, min_log_num, recycle?})
   end
@@ -99,20 +109,35 @@ defmodule ExWal.Manager.Standalone do
     :ok = FS.mkdir_all(fs, dirname)
     {:ok, files} = FS.list(fs, dirname)
 
-    files
-    |> Enum.map(fn f -> Models.VirtualLog.parse_filename(f) end)
-    |> Enum.each(fn {log_num, _} ->
-      recycler
-      |> Recycler.get_min()
-      |> Kernel.<=(log_num)
-      |> if do
-        Recycler.set_min(recycler, log_num + 1)
+    # build logs
+    logs =
+      with do
+        files
+        |> Enum.map(fn f -> VirtualLog.parse_filename(f) end)
+        |> Enum.group_by(fn {log_num, _} -> log_num end)
+        |> Enum.map(fn {log_num, ms} ->
+          ss = Enum.map(ms, fn {_, index} -> %Models.Segment{index: index, dir: dirname} end)
+          %VirtualLog{log_num: log_num, segments: ss}
+        end)
       end
 
-      Recycler.add(recycler, log_num)
+    # set recycler min
+    Enum.each(logs, fn %VirtualLog{log_num: n} ->
+      recycler
+      |> Recycler.get_min()
+      |> Kernel.<=(n)
+      |> if do
+        Recycler.set_min(recycler, n + 1)
+      end
     end)
 
-    {:noreply, state}
+    # add to initial obsolete
+    initial_obsolete =
+      Enum.map(logs, fn %VirtualLog{log_num: log_num} ->
+        %Models.Deletable{fs: fs, path: Path.join(dirname, VirtualLog.filename(log_num, 0)), log_num: log_num}
+      end)
+
+    {:noreply, %__MODULE__{state | initial_obsolete: initial_obsolete}}
   end
 
   @impl GenServer
@@ -121,45 +146,108 @@ defmodule ExWal.Manager.Standalone do
   end
 
   def handle_call({:create, log_num}, _from, state) do
-    %__MODULE__{dirname: dirname, registry: registry, dynamic_sup: dynamic_sup, queue: q} = state
-    log_name = Path.join(dirname, Models.VirtualLog.filename(log_num, 0))
-    {:ok, file} = create_or_reuse(log_name, state)
-    writer_name = {:via, Registry, {registry, {:writer, log_num}}}
+    %__MODULE__{
+      dirname: dirname,
+      registry: registry,
+      dynamic_sup: dynamic_sup,
+      queue: q
+    } = state
 
-    {:ok, _} = DynamicSupervisor.start_child(dynamic_sup, {ExWal.LogWriter.Single, {writer_name, file, log_num}})
-    {:reply, {:ok, ExWal.LogWriter.Single.get(writer_name)}, %__MODULE__{state | queue: [log_num | q]}}
+    # new file
+    writer =
+      with do
+        log_name = Path.join(dirname, Models.VirtualLog.filename(log_num, 0))
+        {:ok, file} = create_or_reuse(log_name, state)
+        writer_name = {:via, Registry, {registry, {:writer, log_num}}}
+        {:ok, _} = DynamicSupervisor.start_child(dynamic_sup, {ExWal.LogWriter.Single, {writer_name, file, log_num}})
+        ExWal.LogWriter.Single.get(writer_name)
+      end
+
+    # add to queue
+    q = [
+      %VirtualLog{
+        log_num: log_num,
+        segments: [%Models.Segment{index: 0, dir: dirname}]
+      }
+      | q
+    ]
+
+    {
+      :reply,
+      {:ok, writer},
+      %__MODULE__{state | queue: q}
+    }
   end
 
   def handle_call({:obsolete, min_log_num, true}, _from, state) do
-    %__MODULE__{recycler: recycler, queue: q} = state
+    %__MODULE__{
+      recycler: recycler,
+      queue: q,
+      initial_obsolete: init_ob,
+      fs: fs
+    } = state
 
-    q
-    |> Enum.filter(fn log_num -> log_num < min_log_num end)
-    |> Enum.each(fn log_num -> Recycler.add(recycler, log_num) end)
+    to_del =
+      with do
+        q
+        |> Enum.filter(fn %VirtualLog{log_num: n} -> n < min_log_num end)
+        |> Enum.reduce(
+          init_ob,
+          fn l, acc ->
+            recycler
+            |> Recycler.add(l)
+            |> if do
+              [from_log(fs, l) | acc]
+            else
+              acc
+            end
+          end
+        )
+      end
 
-    queue = Enum.reject(q, fn log_num -> log_num < min_log_num end)
-    {:reply, :ok, %__MODULE__{state | queue: queue}}
+    queue = Enum.reject(q, fn %VirtualLog{log_num: n} -> n < min_log_num end)
+
+    {
+      :reply,
+      {:ok, to_del},
+      %__MODULE__{
+        state
+        | queue: queue,
+          initial_obsolete: []
+      }
+    }
   end
 
   def handle_call({:obsolete, min_log_num, false}, _from, state) do
-    %__MODULE__{queue: q} = state
-    {:reply, :ok, %__MODULE__{state | queue: Enum.reject(q, fn log_num -> log_num < min_log_num end)}}
+    %__MODULE__{queue: q, initial_obsolete: init_ob} = state
+    q = Enum.reject(q, fn %VirtualLog{log_num: n} -> n < min_log_num end)
+
+    {
+      :reply,
+      {:ok, init_ob},
+      %__MODULE__{
+        state
+        | queue: q,
+          initial_obsolete: []
+      }
+    }
   end
 
   def handle_call(:list, _from, state) do
-    %__MODULE__{queue: q, dirname: dirname} = state
+    %__MODULE__{queue: q} = state
 
-    logs =
-      Enum.map(q, fn log_num ->
-        %Models.VirtualLog{log_num: log_num, segments: [%Models.Segment{index: 0, dir: dirname}]}
-      end)
-
-    {:reply, {:ok, logs}, state}
+    {:reply, {:ok, q}, state}
   end
 
   def handle_call({:open_for_read, log_num}, _from, state) do
     %__MODULE__{queue: q} = state
-    {:reply, start_log_reader(log_num, Enum.member?(q, log_num), state), state}
+
+    exist? =
+      q
+      |> Enum.map(fn %VirtualLog{log_num: n} -> n end)
+      |> Enum.member?(log_num)
+
+    {:reply, start_log_reader(log_num, exist?, state), state}
   end
 
   defp start_log_reader(log_num, log_exists?, state)
@@ -167,7 +255,13 @@ defmodule ExWal.Manager.Standalone do
   defp start_log_reader(_log_num, false, _state), do: {:error, :not_found}
 
   defp start_log_reader(log_num, true, state) do
-    %__MODULE__{registry: registry, dynamic_sup: dynamic_sup, dirname: dirname, fs: fs} = state
+    %__MODULE__{
+      registry: registry,
+      dynamic_sup: dynamic_sup,
+      dirname: dirname,
+      fs: fs
+    } = state
+
     filepath = Path.join(dirname, Models.VirtualLog.filename(log_num, 0))
     reader_name = {:via, Registry, {registry, {:single_reader, log_num}}}
 
@@ -185,9 +279,19 @@ defmodule ExWal.Manager.Standalone do
         FS.create(fs, log_name)
 
       recycled_log ->
-        old_name = Path.join(dirname, Models.VirtualLog.filename(recycled_log, 0))
+        %VirtualLog{log_num: n} = recycled_log
+        old_name = Path.join(dirname, Models.VirtualLog.filename(n, 0))
         FS.reuse_for_write(fs, old_name, log_name)
     end
+  end
+
+  @spec from_log(fs :: ExWal.FS.t(), log :: Models.VirtualLog.t()) :: Models.Deletable.t()
+  defp from_log(fs, %VirtualLog{log_num: l, segments: [%Models.Segment{dir: dir}]}) do
+    %Models.Deletable{
+      fs: fs,
+      path: Path.join(dir, VirtualLog.filename(l, 0)),
+      log_num: l
+    }
   end
 end
 
@@ -197,8 +301,12 @@ defimpl ExWal.Manager, for: ExWal.Manager.Standalone do
   @spec list(ExWal.Manager.t()) :: {:ok, [ExWal.Models.VirtualLog.t()]} | {:error, reason :: any()}
   def list(%Standalone{name: name}), do: Standalone.list(name)
 
-  @spec obsolete(impl :: ExWal.Manager.t(), min_log_num :: ExWal.Models.VirtualLog.log_num(), recycle? :: boolean()) ::
-          :ok | {:error, reason :: any()}
+  @spec obsolete(
+          impl :: ExWal.Manager.t(),
+          min_log_num :: ExWal.Models.VirtualLog.log_num(),
+          recycle? :: boolean()
+        ) ::
+          {:ok, [ExWal.Models.Deletable.t()]} | {:error, reason :: any()}
   def obsolete(%Standalone{name: name}, min_log_num, recycle?), do: Standalone.obsolete(name, min_log_num, recycle?)
 
   @spec create(impl :: ExWal.Manager.t(), log_num :: ExWal.Models.VirtualLog.log_num()) ::

@@ -5,8 +5,12 @@ defprotocol ExWal.Manager do
   @spec list(impl :: t()) :: {:ok, [ExWal.Models.VirtualLog.t()]} | {:error, reason :: any()}
   def list(impl)
 
-  @spec obsolete(impl :: t(), min_log_num :: ExWal.Models.VirtualLog.log_num(), recycle? :: boolean()) ::
-          :ok | {:error, reason :: any()}
+  @spec obsolete(
+          impl :: t(),
+          min_log_num :: ExWal.Models.VirtualLog.log_num(),
+          recycle? :: boolean()
+        ) ::
+          {:ok, [ExWal.Models.Deletable.t()]} | {:error, reason :: any()}
   def obsolete(impl, min_log_num, recycle?)
 
   @spec create(impl :: t(), log_num :: ExWal.Models.VirtualLog.log_num()) ::

@@ -20,10 +20,11 @@ defmodule ExWal.Manager.Failover do
             primary: ExWal.LogWriter.t(),
             secondary: ExWal.LogWriter.t()
           },
-          monitor: pid() | GenServer.name()
+          monitor: pid() | GenServer.name(),
+          init_obsolete: [Models.Deletable.t()]
         }
 
-  defstruct name: nil, recycler: nil, dynamic_sup: nil, registry: nil, dir_handles: %{}, monitor: nil
+  defstruct name: nil, recycler: nil, dynamic_sup: nil, registry: nil, dir_handles: %{}, monitor: nil, init_obsolete: []
 
   def start_link({name, recycler, dynamic_sup, registry, opts}) do
     GenServer.start_link(
@@ -103,8 +104,6 @@ defmodule ExWal.Manager.Failover do
         |> if do
           Recycler.set_min(recycler, log_num + 1)
         end
-
-        Recycler.add(recycler, log_num)
       end)
     end
   end
