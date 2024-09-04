@@ -8,13 +8,14 @@ defprotocol ExWal.Recycler do
   the log file should not be deleted (i.e. the log is being recycled), and
   false otherwise.
   """
+  @type log :: ExWal.Models.VirtualLog.t()
   @type log_num :: ExWal.Models.VirtualLog.log_num()
 
   @spec initialize(impl :: t(), capacity :: non_neg_integer()) :: :ok
   def initialize(impl, capacity)
 
-  @spec add(impl :: t(), log_num :: log_num()) :: boolean()
-  def add(impl, log_num)
+  @spec add(impl :: t(), log :: log()) :: boolean()
+  def add(impl, log)
 
   @doc """
   set_min sets the minimum log number that is allowed to be recycled.
@@ -32,7 +33,7 @@ defprotocol ExWal.Recycler do
   Peek returns the log at the head of the recycling queue, or the zero value
   fileInfo and false if the queue is empty.
   """
-  @spec peek(impl :: t()) :: log_num | nil
+  @spec peek(impl :: t()) :: log() | nil
   def peek(impl)
 
   @doc """
@@ -40,7 +41,7 @@ defprotocol ExWal.Recycler do
   that it matches the specified seq. An error is returned of the recycling
   queue is empty or the head log number does not match the specified one.
   """
-  @spec pop(impl :: t()) :: log_num | nil
+  @spec pop(impl :: t()) :: log() | nil
   def pop(impl)
 end
 
@@ -51,10 +52,18 @@ defmodule ExWal.Recycler.ETS do
 
   use Agent
 
+  alias ExWal.Models.VirtualLog
+
   @type log_num :: ExWal.Models.VirtualLog.log_num()
+  @type log :: ExWal.Models.VirtualLog.t()
 
   @type t :: %__MODULE__{
-          name: Agent.name()
+          name: Agent.name(),
+          logs: [log()],
+          size: non_neg_integer(),
+          capacity: non_neg_integer(),
+          min: log_num(),
+          max: log_num()
         }
 
   @type p :: GenServer.name() | pid()
@@ -73,9 +82,9 @@ defmodule ExWal.Recycler.ETS do
     Agent.get_and_update(name, __MODULE__, :handle_initialize, [capacity])
   end
 
-  @spec add(name :: p(), log_num :: log_num()) :: boolean()
-  def add(name, log_num) do
-    Agent.get_and_update(name, __MODULE__, :handle_add, [log_num])
+  @spec add(name :: p(), log :: log()) :: boolean()
+  def add(name, log) do
+    Agent.get_and_update(name, __MODULE__, :handle_add, [log])
   end
 
   @spec set_min(name :: p(), log_num :: log_num()) :: :ok
@@ -88,12 +97,12 @@ defmodule ExWal.Recycler.ETS do
     Agent.get(name, __MODULE__, :handle_get_min, [])
   end
 
-  @spec peek(name :: p()) :: log_num() | nil
+  @spec peek(name :: p()) :: log() | nil
   def peek(name) do
     Agent.get(name, __MODULE__, :handle_peek, [])
   end
 
-  @spec pop(name :: p()) :: log_num() | nil
+  @spec pop(name :: p()) :: log() | nil
   def pop(name) do
     Agent.get_and_update(name, __MODULE__, :handle_pop, [])
   end
@@ -108,19 +117,20 @@ defmodule ExWal.Recycler.ETS do
     {:ok, %__MODULE__{state | capacity: capacity}}
   end
 
-  def handle_add(state, log_num)
+  def handle_add(state, log)
 
-  def handle_add(%__MODULE__{size: size, capacity: capacity} = state, _log_num) when size >= capacity, do: {false, state}
-  def handle_add(%__MODULE__{min: min} = state, log_num) when log_num < min, do: {false, state}
+  def handle_add(%__MODULE__{size: size, capacity: capacity} = state, _log) when size >= capacity, do: {false, state}
+  def handle_add(%__MODULE__{min: min} = state, %VirtualLog{log_num: log_num}) when log_num < min, do: {false, state}
 
-  def handle_add(%__MODULE__{max: max} = state, log_num) when log_num <= max, do: {true, state}
+  def handle_add(%__MODULE__{max: max} = state, %VirtualLog{log_num: log_num}) when log_num <= max, do: {true, state}
 
-  def handle_add(state, log_num) do
+  def handle_add(state, log) do
     %__MODULE__{logs: logs, size: size} = state
+    %VirtualLog{log_num: log_num} = log
 
     state =
       %__MODULE__{
-        logs: [log_num | logs],
+        logs: [log | logs],
         size: size + 1,
         max: log_num
       }
@@ -138,16 +148,16 @@ defmodule ExWal.Recycler.ETS do
   def handle_peek(%__MODULE__{size: 0}), do: nil
 
   def handle_peek(state) do
-    %__MODULE__{logs: [log_num | _]} = state
-    log_num
+    %__MODULE__{logs: [log | _]} = state
+    log
   end
 
   def handle_pop(state)
   def handle_pop(%__MODULE__{size: 0} = state), do: {nil, state}
 
   def handle_pop(state) do
-    %__MODULE__{logs: [log_num | logs], size: size} = state
-    {log_num, %__MODULE__{state | logs: logs, size: size - 1}}
+    %__MODULE__{logs: [log | logs], size: size} = state
+    {log, %__MODULE__{state | logs: logs, size: size - 1}}
   end
 end
 
@@ -158,8 +168,8 @@ defimpl ExWal.Recycler, for: ExWal.Recycler.ETS do
     ETS.initialize(name, capacity)
   end
 
-  def add(%ETS{name: name}, log_num) do
-    ETS.add(name, log_num)
+  def add(%ETS{name: name}, log) do
+    ETS.add(name, log)
   end
 
   def set_min(%ETS{name: name}, log_num) do
