@@ -1,9 +1,10 @@
 defmodule ExWal.Monitor.DirAndFile do
   @moduledoc false
-  defstruct dir: "", error_cnt: 0
+  defstruct dir: "", fs: nil, error_cnt: 0
 
   @type t :: %__MODULE__{
           dir: String.t(),
+          fs: ExWal.FS.t(),
           error_cnt: non_neg_integer()
         }
 end
@@ -24,14 +25,8 @@ defmodule ExWal.Monitor do
 
   defstruct last_fall_at: 0,
             dirs: [
-              primary: %DirAndFile{
-                dir: "",
-                error_cnt: 0
-              },
-              secondary: %DirAndFile{
-                dir: "",
-                error_cnt: 0
-              }
+              primary: %DirAndFile{},
+              secondary: %DirAndFile{}
             ],
             observer: nil,
             writer: %{
@@ -42,7 +37,10 @@ defmodule ExWal.Monitor do
             }
 
   @spec start_link({
-          dirs :: [primary: DirAndFile.t(), secondary: DirAndFile.t()],
+          dirs :: [
+            primary: DirAndFile.t(),
+            secondary: DirAndFile.t()
+          ],
           observer :: pid() | GenServer.name()
         }) ::
           GenServer.on_start()
@@ -54,9 +52,9 @@ defmodule ExWal.Monitor do
 
   @spec new_writer(
           p :: pid(),
-          writer_creator_fn :: (dir :: String.t() -> writer :: ExWal.LogWriter.t())
+          writer_creator_fn :: (dir :: String.t(), fs :: ExWal.FS.t() -> writer :: ExWal.LogWriter.t())
         ) ::
-          :ok | {:error, reason :: any()}
+          {:ok, ExWal.LogWriter.t()} | {:error, reason :: any()}
   def new_writer(p, writer_creator_fn), do: GenServer.call(p, {:new_writer, writer_creator_fn})
 
   @spec no_writer(p :: pid()) :: :ok | {:error, reason :: any()}
@@ -94,10 +92,11 @@ defmodule ExWal.Monitor do
   def handle_call({:new_writer, writer_creator_fn}, _from, state) do
     %__MODULE__{writer: writer, dirs: dirs} = state
     %{type: type} = writer
-    %DirAndFile{dir: dir} = dirs[type]
-    writer = %{writer | w: writer_creator_fn.(dir)}
+    %DirAndFile{dir: dir, fs: fs} = dirs[type]
+    w = writer_creator_fn.(dir, fs)
+    writer = %{writer | w: w}
 
-    {:reply, :ok, %__MODULE__{state | writer: writer}}
+    {:reply, {:ok, w}, %__MODULE__{state | writer: writer}}
   end
 
   def handle_call(:no_writer, _, state) do

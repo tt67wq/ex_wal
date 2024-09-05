@@ -97,7 +97,6 @@ defmodule ExWal.LogWriter.Failover do
   end
 
   def handle_call({:switch_dir, dir}, _, state) do
-    # {:reply, :ok, }
     dir
     |> do_switch_dir(state)
     |> case do
@@ -213,7 +212,13 @@ defmodule ExWal.LogWriter.Failover do
   defp do_switch_dir(_, %__MODULE__{writers: %{cnt: @max_log_writer}} = state), do: {{:error, :normal}, state}
 
   defp do_switch_dir(new_dir, state) do
-    %__MODULE__{fs: fs, log_num: log_num, registry: registry, writers: %{idx: idx}} = state
+    %__MODULE__{
+      fs: fs,
+      log_num: log_num,
+      registry: registry,
+      writers: %{idx: idx}
+    } = state
+
     log_name = Path.join(new_dir, Models.VirtualLog.filename(log_num, idx))
     writer_name = {:via, Registry, {registry, {:writer, log_num, idx}}}
 

@@ -28,6 +28,8 @@ defmodule ExWal.Obeserver do
     Agent.get(p, __MODULE__, :handle_stats, [])
   end
 
+  def stop(p), do: Agent.stop(p)
+
   # ---------------- handler ----------------
   def handle_record_start(state) do
     %__MODULE__{state | latency: System.monotonic_time()}

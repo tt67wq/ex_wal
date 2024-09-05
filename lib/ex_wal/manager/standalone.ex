@@ -10,6 +10,8 @@ defmodule ExWal.Manager.Standalone do
   alias ExWal.Models.VirtualLog
   alias ExWal.Recycler
 
+  require Logger
+
   @type t :: %__MODULE__{
           name: GenServer.name(),
           recycler: ExWal.Recycler.t(),
@@ -32,15 +34,14 @@ defmodule ExWal.Manager.Standalone do
 
   @spec start_link({
           name :: GenServer.name(),
-          recycler :: ExWal.Recycler.t(),
           dynamic_sup :: GenServer.name(),
           registry :: GenServer.name(),
           opts :: Options.t()
         }) :: GenServer.on_start()
-  def start_link({name, recycler, dynamic_sup, registry, opts}) do
+  def start_link({name, dynamic_sup, registry, opts}) do
     GenServer.start_link(
       __MODULE__,
-      {name, recycler, dynamic_sup, registry, opts},
+      {name, dynamic_sup, registry, opts},
       name: name
     )
   end
@@ -83,21 +84,42 @@ defmodule ExWal.Manager.Standalone do
   # --------------------- server -----------------
 
   @impl GenServer
-  def init({name, recycler, dynamic_sup, registry, opts}) do
+  def init({name, dynamic_sup, registry, opts}) do
     %Options{primary: primary} = opts
 
     {:ok,
      %__MODULE__{
        name: name,
-       recycler: recycler,
        dynamic_sup: dynamic_sup,
        registry: registry,
        fs: primary[:fs],
        dirname: primary[:dir]
-     }, {:continue, {:initialize, opts}}}
+     }, {:continue, {:recycler, opts}}}
   end
 
   @impl GenServer
+  def terminate(reason, %__MODULE__{recycler: r}) do
+    may_log_reason(reason)
+    Recycler.stop(r)
+  end
+
+  @impl GenServer
+  def handle_continue({:recycler, opts}, state) do
+    %__MODULE__{
+      dirname: dirname,
+      registry: registry
+    } = state
+
+    recycler =
+      with do
+        rn = {:via, Registry, {registry, {:recycler, dirname}}}
+        {:ok, _} = Recycler.ETS.start_link(rn)
+        Recycler.ETS.get(rn)
+      end
+
+    {:noreply, %__MODULE__{state | recycler: recycler}, {:continue, {:initialize, opts}}}
+  end
+
   def handle_continue({:initialize, opts}, state) do
     %__MODULE__{dirname: dirname, fs: fs, recycler: recycler} = state
 
@@ -293,6 +315,9 @@ defmodule ExWal.Manager.Standalone do
       log_num: l
     }
   end
+
+  defp may_log_reason(:normal), do: :pass
+  defp may_log_reason(reason), do: Logger.error("standalone manager terminated, reason: #{inspect(reason)}")
 end
 
 defimpl ExWal.Manager, for: ExWal.Manager.Standalone do

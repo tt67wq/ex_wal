@@ -11,20 +11,25 @@ defmodule ExWal.Manager.Failover do
   alias ExWal.Obeserver
   alias ExWal.Recycler
 
+  require Logger
+
   @type t :: %__MODULE__{
           name: GenServer.name(),
           recycler: ExWal.Recycler.t(),
           dynamic_sup: GenServer.name(),
           registry: GenServer.name(),
-          dir_handles: %{
-            primary: ExWal.LogWriter.t(),
-            secondary: ExWal.LogWriter.t()
-          },
           monitor: pid() | GenServer.name(),
-          init_obsolete: [Models.Deletable.t()]
+          observer: pid() | GenServer.name(),
+          initial_obsolete: [Models.Deletable.t()]
         }
 
-  defstruct name: nil, recycler: nil, dynamic_sup: nil, registry: nil, dir_handles: %{}, monitor: nil, init_obsolete: []
+  defstruct name: nil,
+            recycler: nil,
+            dynamic_sup: nil,
+            registry: nil,
+            monitor: nil,
+            observer: nil,
+            initial_obsolete: []
 
   def start_link({name, recycler, dynamic_sup, registry, opts}) do
     GenServer.start_link(
@@ -32,6 +37,17 @@ defmodule ExWal.Manager.Failover do
       {name, recycler, dynamic_sup, registry, opts},
       name: name
     )
+  end
+
+  def stop(p), do: GenServer.stop(p)
+
+  @spec create(
+          name :: GenServer.name(),
+          log_num :: non_neg_integer()
+        ) ::
+          {:ok, ExWal.LogWriter.t()} | {:error, reason :: any()}
+  def create(name, log_num) do
+    GenServer.call(name, {:create, log_num})
   end
 
   # ---------------- server ---------------
@@ -42,7 +58,6 @@ defmodule ExWal.Manager.Failover do
       recycler: recycler,
       dynamic_sup: dynamic_sup,
       registry: registry,
-      dir_handles: %{},
       monitor: nil
     }
 
@@ -59,6 +74,14 @@ defmodule ExWal.Manager.Failover do
     end
   end
 
+  def terminate(reason, state) do
+    %__MODULE__{monitor: m, observer: ob} = state
+    Monitor.stop(m)
+    Obeserver.stop(ob)
+
+    may_log_reason(reason)
+  end
+
   def handle_continue({:monitor, opts}, state) do
     %__MODULE__{registry: registry, name: name} = state
 
@@ -70,14 +93,18 @@ defmodule ExWal.Manager.Failover do
 
         Monitor.start_link({
           [
-            primary: %DirAndFile{dir: pr[:dir]},
-            secondary: %DirAndFile{dir: sc[:dir]}
+            primary: %DirAndFile{dir: pr[:dir], fs: pr[:fs]},
+            secondary: %DirAndFile{dir: sc[:dir], fs: pr[:fs]}
           ],
           ob
         })
       end
 
-    {:noreply, %__MODULE__{state | monitor: m}, {:continue, {:initialize, opts}}}
+    {
+      :noreply,
+      %__MODULE__{state | monitor: m, observer: ob},
+      {:continue, {:initialize, opts}}
+    }
   end
 
   def handle_continue({:initialize, opts}, state) do
@@ -102,8 +129,45 @@ defmodule ExWal.Manager.Failover do
         init_recycler_and_obsolete(fs, dir, recycler)
       end
 
-    {:noreply, %__MODULE__{state | init_obsolete: init_obsolete_primary ++ init_obsolete_secondary}}
+    {:noreply, %__MODULE__{state | initial_obsolete: init_obsolete_primary ++ init_obsolete_secondary}}
   end
+
+  def handle_call({:create, log_num}, _, state) do
+    %__MODULE__{monitor: monitor, registry: registry, dynamic_sup: ds, observer: ob} = state
+
+    writer_create_func = fn dir, fs ->
+      name = {:via, Registry, {registry, {:failover_writer, log_num}}}
+
+      {:ok, _} =
+        DynamicSupervisor.start_child(
+          ds,
+          {
+            ExWal.LogWriter.Failover,
+            {
+              name,
+              registry,
+              fs,
+              dir,
+              log_num,
+              ob
+            }
+          }
+        )
+
+      ExWal.LogWriter.Failover.get(name)
+    end
+
+    {:reply, Monitor.new_writer(monitor, writer_create_func), state}
+  end
+
+  # def handle_call({:obsolete, min_log_num, true}, _from, state) do
+  #   %__MODULE__{
+  #     recycler: recycler,
+  #     initial_obsolete: to_del,
+  #   } = state
+
+
+  # end
 
   defp test_secondary_dir(fs: fs, dir: dir) do
     fs
@@ -153,4 +217,7 @@ defmodule ExWal.Manager.Failover do
       }
     end)
   end
+
+  defp may_log_reason(:normal), do: :pass
+  defp may_log_reason(reason), do: Logger.error("failover manager terminated: #{inspect(reason)}")
 end

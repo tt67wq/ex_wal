@@ -43,6 +43,9 @@ defprotocol ExWal.Recycler do
   """
   @spec pop(impl :: t()) :: log() | nil
   def pop(impl)
+
+  @spec stop(impl :: t()) :: :ok
+  def stop(impl)
 end
 
 defmodule ExWal.Recycler.ETS do
@@ -50,7 +53,7 @@ defmodule ExWal.Recycler.ETS do
   An ETS based WAL file recycler.
   """
 
-  use Agent
+  use Agent, restart: :transient
 
   alias ExWal.Models.VirtualLog
 
@@ -72,6 +75,10 @@ defmodule ExWal.Recycler.ETS do
 
   def start_link(name) do
     Agent.start_link(__MODULE__, :init, [name], name: name)
+  end
+
+  def stop(name) do
+    Agent.stop(name)
   end
 
   @spec get(name :: p()) :: t()
@@ -107,7 +114,7 @@ defmodule ExWal.Recycler.ETS do
     Agent.get_and_update(name, __MODULE__, :handle_pop, [])
   end
 
-  # ------------- server -------------
+  # ------------- handlers -------------
 
   def init(name) do
     %__MODULE__{name: name, logs: []}
@@ -186,5 +193,9 @@ defimpl ExWal.Recycler, for: ExWal.Recycler.ETS do
 
   def pop(%ETS{name: name}) do
     ETS.pop(name)
+  end
+
+  def stop(%ETS{name: name}) do
+    ETS.stop(name)
   end
 end
