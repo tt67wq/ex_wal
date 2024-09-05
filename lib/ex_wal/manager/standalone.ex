@@ -138,7 +138,11 @@ defmodule ExWal.Manager.Standalone do
         |> Enum.map(fn f -> VirtualLog.parse_filename(f) end)
         |> Enum.group_by(fn {log_num, _} -> log_num end)
         |> Enum.map(fn {log_num, ms} ->
-          ss = Enum.map(ms, fn {_, index} -> %Models.Segment{index: index, dir: dirname} end)
+          ss =
+            ms
+            |> Enum.map(fn {_, index} -> %Models.Segment{index: index, dir: dirname, fs: fs} end)
+            |> Enum.sort_by(fn %Models.Segment{index: i} -> i end)
+
           %VirtualLog{log_num: log_num, segments: ss}
         end)
       end
@@ -172,7 +176,8 @@ defmodule ExWal.Manager.Standalone do
       dirname: dirname,
       registry: registry,
       dynamic_sup: dynamic_sup,
-      queue: q
+      queue: q,
+      fs: fs
     } = state
 
     # new file
@@ -189,7 +194,7 @@ defmodule ExWal.Manager.Standalone do
     q = [
       %VirtualLog{
         log_num: log_num,
-        segments: [%Models.Segment{index: 0, dir: dirname}]
+        segments: [%Models.Segment{index: 0, dir: dirname, fs: fs}]
       }
       | q
     ]
@@ -206,7 +211,6 @@ defmodule ExWal.Manager.Standalone do
       recycler: recycler,
       queue: q,
       initial_obsolete: init_ob,
-      fs: fs
     } = state
 
     to_del =
@@ -219,7 +223,7 @@ defmodule ExWal.Manager.Standalone do
             recycler
             |> Recycler.add(l)
             |> if do
-              [from_log(fs, l) | acc]
+              [from_log(l) | acc]
             else
               acc
             end
@@ -307,8 +311,8 @@ defmodule ExWal.Manager.Standalone do
     end
   end
 
-  @spec from_log(fs :: ExWal.FS.t(), log :: Models.VirtualLog.t()) :: Models.Deletable.t()
-  defp from_log(fs, %VirtualLog{log_num: l, segments: [%Models.Segment{dir: dir}]}) do
+  @spec from_log(Models.VirtualLog.t()) :: Models.Deletable.t()
+  defp from_log(%VirtualLog{log_num: l, segments: [%Models.Segment{dir: dir, fs: fs}]}) do
     %Models.Deletable{
       fs: fs,
       path: Path.join(dir, VirtualLog.filename(l, 0)),

@@ -27,6 +27,7 @@ defmodule ExWal.LogWriter.Failover do
             dir: "",
             log_num: 0,
             writers: %{
+              # index => single_writer
               s: %{},
               cnt: 0
             },
@@ -186,6 +187,21 @@ defmodule ExWal.LogWriter.Failover do
         {:reply, {:error, reason}, state}
     end
   end
+
+  # def handle_call({:get_log, _, state}) do
+  #   %__MODULE__{
+  #     log_num: log_num,
+  #     writers: %{
+  #       s: s
+  #     }
+  #   } = state
+
+  #   s
+  #   |> Enum.map(fn {idx, w} ->
+  #     end)
+
+  #   {:reply, {:ok, %Models.VirtualLog{log_num: log_num}}, state}
+  # end
 
   def handle_info({_task, {:switch_dir_notify, {:ok, _} = notify}}, state) do
     {:ok, {new_dir, writer, writer_idx}} = notify
