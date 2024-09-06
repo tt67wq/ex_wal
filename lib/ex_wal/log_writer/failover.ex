@@ -3,6 +3,18 @@ defmodule ExWal.LogWriter.Failover.LogicalOffset do
   defstruct offset: 0, latest_log_size: 0, estimated_offset?: false
 end
 
+defmodule ExWal.LogWriter.Failover.WriterAndRecorder do
+  @moduledoc false
+  defstruct w: nil, observer: nil, dir: "", fs: nil
+
+  @type t :: %__MODULE__{
+          w: ExWal.LogWriter.t(),
+          observer: pid() | GenServer.name(),
+          dir: String.t(),
+          fs: ExWal.FS.t()
+        }
+end
+
 defmodule ExWal.LogWriter.Failover do
   @moduledoc """
   FailoverWriter is the implementation of LogWriter in failover mode.
@@ -13,6 +25,7 @@ defmodule ExWal.LogWriter.Failover do
   alias ExWal.FS
   alias ExWal.LogWriter
   alias ExWal.LogWriter.Failover.LogicalOffset
+  alias ExWal.LogWriter.Failover.WriterAndRecorder
   alias ExWal.LogWriter.Single
   alias ExWal.Models
   alias ExWal.Obeserver
@@ -24,25 +37,23 @@ defmodule ExWal.LogWriter.Failover do
   defstruct name: nil,
             registry: nil,
             fs: nil,
-            dir: "",
             log_num: 0,
             writers: %{
-              # index => single_writer
+              # index => WriterAndRecorder
               s: %{},
               cnt: 0
             },
             q: [],
-            observer: nil,
             logical_offset: %LogicalOffset{
               offset: 0,
               latest_log_size: 0,
               estimated_offset?: false
             }
 
-  def start_link({name, registry, fs, dir, log_num, observer}) do
+  def start_link({name, registry, fs, dir, log_num}) do
     GenServer.start_link(
       __MODULE__,
-      {name, registry, fs, dir, log_num, observer},
+      {name, registry, fs, dir, log_num},
       name: name
     )
   end
@@ -63,18 +74,22 @@ defmodule ExWal.LogWriter.Failover do
   @spec switch_dir(name :: GenServer.name(), new_dir :: binary()) :: :ok
   def switch_dir(name, new_dir), do: GenServer.call(name, {:switch_dir, new_dir})
 
+  @spec get_log(name :: GenServer.name()) :: {:ok, Models.VirtualLog.t()} | {:error, reason :: any()}
+  def get_log(name), do: GenServer.call(name, :get_log)
+
+  @spec current_observer(name :: GenServer.name()) :: pid() | GenServer.name()
+  def current_observer(name), do: GenServer.call(name, :current_observer)
+
   # ---------------- server -----------------
 
-  def init({name, registry, fs, dir, log_num, observer}) do
+  def init({name, registry, fs, dir, log_num}) do
     {
       :ok,
       %__MODULE__{
         name: name,
         registry: registry,
         fs: fs,
-        dir: dir,
-        log_num: log_num,
-        observer: observer
+        log_num: log_num
       },
       {:continue, {:switch_dir, dir}}
     }
@@ -128,13 +143,14 @@ defmodule ExWal.LogWriter.Failover do
         _,
         %__MODULE__{logical_offset: %LogicalOffset{estimated_offset?: true}} = state
       ) do
-    %__MODULE__{writers: writers, logical_offset: logical_offset, observer: ob} = state
+    %__MODULE__{writers: writers, logical_offset: logical_offset} = state
     writer = get_latest_writer(writers)
+    %WriterAndRecorder{w: w, observer: ob} = writer
     {:sync_writes, p} = input
 
     Obeserver.record_start(ob)
 
-    writer
+    w
     |> LogWriter.write_record(p)
     |> case do
       {:ok, of} ->
@@ -154,14 +170,15 @@ defmodule ExWal.LogWriter.Failover do
   end
 
   def handle_call({:sync_writes, _} = input, _, state) do
-    %__MODULE__{writers: writers, logical_offset: logical_offset, observer: ob} = state
+    %__MODULE__{writers: writers, logical_offset: logical_offset} = state
     writer = get_latest_writer(writers)
     {:sync_writes, p} = input
+    %WriterAndRecorder{w: w, observer: ob} = writer
     %LogicalOffset{latest_log_size: ls, offset: offset} = logical_offset
 
     Obeserver.record_start(ob)
 
-    writer
+    w
     |> LogWriter.write_record(p)
     |> case do
       {:ok, of} ->
@@ -188,31 +205,40 @@ defmodule ExWal.LogWriter.Failover do
     end
   end
 
-  # def handle_call({:get_log, _, state}) do
-  #   %__MODULE__{
-  #     log_num: log_num,
-  #     writers: %{
-  #       s: s
-  #     }
-  #   } = state
+  def handle_call(:get_log, _, state) do
+    %__MODULE__{
+      log_num: log_num,
+      writers: %{
+        s: s
+      }
+    } = state
 
-  #   s
-  #   |> Enum.map(fn {idx, w} ->
-  #     end)
+    segs =
+      s
+      |> Enum.map(fn {idx, wr} ->
+        %WriterAndRecorder{dir: dir, fs: fs} = wr
+        %Models.Segment{index: idx, dir: dir, fs: fs}
+      end)
+      |> Enum.sort_by(& &1.index)
 
-  #   {:reply, {:ok, %Models.VirtualLog{log_num: log_num}}, state}
-  # end
+    {:reply, {:ok, %Models.VirtualLog{log_num: log_num, segments: segs}}, state}
+  end
+
+  def handle_call(:current_observer, _, state) do
+    %__MODULE__{writers: %{s: s, cnt: cnt}} = state
+    %WriterAndRecorder{observer: ob} = Map.fetch!(s, cnt - 1)
+    {:reply, ob, state}
+  end
 
   def handle_info({_task, {:switch_dir_notify, {:ok, _} = notify}}, state) do
-    {:ok, {new_dir, writer, writer_idx}} = notify
-    %__MODULE__{writers: writers, q: q, dir: old_dir} = state
-    may_write_buffer(writer, q)
+    {:ok, {idx, wr}} = notify
+    %__MODULE__{writers: writers, q: q} = state
+    may_write_buffer(wr, q)
 
     %{s: s, cnt: cnt} = writers
-    writers = %{s: Map.put(s, writer_idx, writer), cnt: cnt + 1}
-    new_dir = if writer_idx >= cnt, do: new_dir, else: old_dir
+    writers = %{s: Map.put(s, idx, wr), cnt: cnt + 1}
 
-    {:noreply, %__MODULE__{state | dir: new_dir, writers: writers}}
+    {:noreply, %__MODULE__{state | writers: writers}}
   end
 
   def handle_info({_task, {:switch_dir_notify, {:error, _} = _notify}}, state) do
@@ -232,11 +258,12 @@ defmodule ExWal.LogWriter.Failover do
       fs: fs,
       log_num: log_num,
       registry: registry,
-      writers: %{idx: idx}
+      writers: %{cnt: idx}
     } = state
 
     log_name = Path.join(new_dir, Models.VirtualLog.filename(log_num, idx))
     writer_name = {:via, Registry, {registry, {:writer, log_num, idx}}}
+    {:ok, observer} = Obeserver.start_link({:via, Registry, {registry, {:observer, log_num}}})
 
     # create writer asynchonously
     Task.async(fn ->
@@ -246,7 +273,15 @@ defmodule ExWal.LogWriter.Failover do
         |> case do
           {:ok, file} ->
             {:ok, _} = Single.start_link({writer_name, file, log_num})
-            {:ok, {new_dir, Single.get(writer_name), idx}}
+
+            wr = %WriterAndRecorder{
+              w: Single.get(writer_name),
+              observer: observer,
+              dir: new_dir,
+              fs: fs
+            }
+
+            {:ok, {idx, wr}}
 
           err ->
             err
@@ -266,6 +301,7 @@ defmodule ExWal.LogWriter.Failover do
   defp may_log_reason(:normal), do: :pass
   defp may_log_reason(reason), do: Logger.error("FailoverWriter terminate: #{inspect(reason)}")
 
+  @spec get_latest_writer(writers :: %{s: map(), cnt: non_neg_integer()}) :: WriterAndRecorder.t() | nil
   defp get_latest_writer(writers)
   defp get_latest_writer(%{cnt: 0}), do: nil
 
@@ -274,14 +310,28 @@ defmodule ExWal.LogWriter.Failover do
     Map.get(s, cnt - 1)
   end
 
-  defp may_write_buffer(writer, p)
-  defp may_write_buffer(_writer, []), do: :pass
+  defp may_write_buffer(wr, p)
+  defp may_write_buffer(_, []), do: :pass
 
-  defp may_write_buffer(writer, p) do
+  defp may_write_buffer(wr, p) do
+    %WriterAndRecorder{w: w, observer: ob} = wr
+
     p
     |> Enum.reverse()
     |> IO.iodata_to_binary()
-    |> then(fn x -> LogWriter.write_record(writer, x) end)
+    |> then(fn x ->
+      Obeserver.record_start(ob)
+
+      w
+      |> LogWriter.write_record(x)
+      |> case do
+        {:ok, _} ->
+          Obeserver.record_end(ob, nil)
+
+        {:error, reason} ->
+          Obeserver.record_end(ob, reason)
+      end
+    end)
   end
 end
 

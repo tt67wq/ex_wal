@@ -28,7 +28,6 @@ defmodule ExWal.Monitor do
               primary: %DirAndFile{},
               secondary: %DirAndFile{}
             ],
-            observer: nil,
             writer: %{
               w: nil,
               type: :primary,
@@ -40,12 +39,11 @@ defmodule ExWal.Monitor do
           dirs :: [
             primary: DirAndFile.t(),
             secondary: DirAndFile.t()
-          ],
-          observer :: pid() | GenServer.name()
+          ]
         }) ::
           GenServer.on_start()
-  def start_link({dirs, observer}) do
-    GenServer.start_link(__MODULE__, {dirs, observer})
+  def start_link({dirs}) do
+    GenServer.start_link(__MODULE__, {dirs})
   end
 
   def stop(p), do: GenServer.stop(p)
@@ -61,8 +59,8 @@ defmodule ExWal.Monitor do
   def no_writer(p), do: GenServer.call(p, :no_writer)
 
   # ---------------- server ---------------
-  def init({dirs, observer}) do
-    {:ok, %__MODULE__{dirs: dirs, observer: observer}, @unhealthy_sampling_interval}
+  def init({dirs}) do
+    {:ok, %__MODULE__{dirs: dirs}, @unhealthy_sampling_interval}
   end
 
   def terminate(reason, _state) do
@@ -78,8 +76,13 @@ defmodule ExWal.Monitor do
   end
 
   def handle_info(:timeout, state) do
-    %__MODULE__{dirs: dirs, observer: ob} = state
-    {latency, error} = Obeserver.stats(ob)
+    %__MODULE__{dirs: dirs, writer: %{w: w}} = state
+
+    {latency, error} =
+      w.name
+      |> Failover.current_observer()
+      |> Obeserver.stats()
+
     {switch?, state} = switchable?(latency, error, dirs)
 
     {:noreply, may_switch(switch?, state), @unhealthy_sampling_interval}

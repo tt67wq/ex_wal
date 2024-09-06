@@ -83,10 +83,6 @@ defmodule ExWal.Manager.Failover do
   end
 
   def handle_continue({:monitor, opts}, state) do
-    %__MODULE__{registry: registry, name: name} = state
-
-    {:ok, ob} = Obeserver.start_link({:via, Registry, {registry, {:observer, name}}})
-
     {:ok, m} =
       with do
         %Options{primary: pr, secondary: sc} = opts
@@ -95,14 +91,13 @@ defmodule ExWal.Manager.Failover do
           [
             primary: %DirAndFile{dir: pr[:dir], fs: pr[:fs]},
             secondary: %DirAndFile{dir: sc[:dir], fs: pr[:fs]}
-          ],
-          ob
+          ]
         })
       end
 
     {
       :noreply,
-      %__MODULE__{state | monitor: m, observer: ob},
+      %__MODULE__{state | monitor: m},
       {:continue, {:initialize, opts}}
     }
   end
@@ -165,7 +160,6 @@ defmodule ExWal.Manager.Failover do
   #     recycler: recycler,
   #     initial_obsolete: to_del,
   #   } = state
-
 
   # end
 
