@@ -20,7 +20,9 @@ defmodule ExWal.Manager.Failover do
           registry: GenServer.name(),
           monitor: pid() | GenServer.name(),
           observer: pid() | GenServer.name(),
-          initial_obsolete: [Models.Deletable.t()]
+          initial_obsolete: [Models.Deletable.t()],
+          current_writer: ExWal.LogWriter.t(),
+          closed_writers: %{Models.VirtualLog.log_num() => ExWal.LogWriter.t()}
         }
 
   defstruct name: nil,
@@ -29,7 +31,10 @@ defmodule ExWal.Manager.Failover do
             registry: nil,
             monitor: nil,
             observer: nil,
-            initial_obsolete: []
+            initial_obsolete: [],
+            # log_num => failover writer
+            current_writer: nil,
+            closed_writers: %{}
 
   def start_link({name, recycler, dynamic_sup, registry, opts}) do
     GenServer.start_link(
@@ -52,6 +57,7 @@ defmodule ExWal.Manager.Failover do
 
   # ---------------- server ---------------
 
+  @impl GenServer
   def init({name, recycler, dynamic_sup, registry, opts}) do
     state = %__MODULE__{
       name: name,
@@ -74,6 +80,7 @@ defmodule ExWal.Manager.Failover do
     end
   end
 
+  @impl GenServer
   def terminate(reason, state) do
     %__MODULE__{monitor: m, observer: ob} = state
     Monitor.stop(m)
@@ -82,6 +89,7 @@ defmodule ExWal.Manager.Failover do
     may_log_reason(reason)
   end
 
+  @impl GenServer
   def handle_continue({:monitor, opts}, state) do
     {:ok, m} =
       with do
@@ -127,8 +135,14 @@ defmodule ExWal.Manager.Failover do
     {:noreply, %__MODULE__{state | initial_obsolete: init_obsolete_primary ++ init_obsolete_secondary}}
   end
 
-  def handle_call({:create, log_num}, _, state) do
-    %__MODULE__{monitor: monitor, registry: registry, dynamic_sup: ds, observer: ob} = state
+  @impl GenServer
+  def handle_call({:create, log_num}, _, %__MODULE__{current_writer: nil} = state) do
+    %__MODULE__{
+      monitor: monitor,
+      registry: registry,
+      dynamic_sup: ds,
+      observer: ob
+    } = state
 
     writer_create_func = fn dir, fs ->
       name = {:via, Registry, {registry, {:failover_writer, log_num}}}
@@ -152,8 +166,12 @@ defmodule ExWal.Manager.Failover do
       ExWal.LogWriter.Failover.get(name)
     end
 
-    {:reply, Monitor.new_writer(monitor, writer_create_func), state}
+    {:ok, w} = Monitor.new_writer(monitor, writer_create_func)
+
+    {:reply, {:ok, w}, %__MODULE__{state | current_writer: w}}
   end
+
+  def handle_call({:create, _log_num}, _, state), do: {:reply, {:error, "previous writer not closed"}, state}
 
   # def handle_call({:obsolete, min_log_num, true}, _from, state) do
   #   %__MODULE__{

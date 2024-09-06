@@ -294,8 +294,12 @@ defmodule ExWal.LogWriter.Failover do
   end
 
   defp close_writers(state) do
-    %__MODULE__{writers: {writers, _}} = state
-    Enum.each(writers, &Single.stop/1)
+    %__MODULE__{writers: %{s: s}} = state
+
+    Enum.each(s, fn %WriterAndRecorder{w: w, observer: ob} ->
+      LogWriter.stop(w)
+      Obeserver.stop(ob)
+    end)
   end
 
   defp may_log_reason(:normal), do: :pass

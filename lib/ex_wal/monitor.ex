@@ -102,6 +102,8 @@ defmodule ExWal.Monitor do
     {:reply, {:ok, w}, %__MODULE__{state | writer: writer}}
   end
 
+  def handle_call(:no_writer, _, %__MODULE__{writer: %{w: nil}} = state), do: {:reply, :ok, state}
+
   def handle_call(:no_writer, _, state) do
     %__MODULE__{writer: writer} = state
     writer = %{writer | w: nil}
