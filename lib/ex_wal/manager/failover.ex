@@ -22,7 +22,8 @@ defmodule ExWal.Manager.Failover do
           observer: pid() | GenServer.name(),
           initial_obsolete: [Models.Deletable.t()],
           current_writer: {Models.VirtualLog.log_num(), ExWal.LogWriter.t()} | nil,
-          closed_writers: %{Models.VirtualLog.log_num() => Models.VirtualLog.t()}
+          closed_logs: [Models.VirtualLog.t()],
+          opts: Options.t()
         }
 
   defstruct name: nil,
@@ -32,9 +33,9 @@ defmodule ExWal.Manager.Failover do
             monitor: nil,
             observer: nil,
             initial_obsolete: [],
-            # log_num => failover writer
             current_writer: nil,
-            closed_writers: %{}
+            closed_logs: [],
+            opts: nil
 
   def start_link({name, recycler, dynamic_sup, registry, opts}) do
     GenServer.start_link(
@@ -55,6 +56,16 @@ defmodule ExWal.Manager.Failover do
     GenServer.call(name, {:create, log_num})
   end
 
+  @spec obsolete(
+          name :: GenServer.name(),
+          min_log_num :: non_neg_integer(),
+          recycle? :: boolean()
+        ) ::
+          {:ok, [Models.Deletable.t()]} | {:error, reason :: any()}
+  def obsolete(name, min_log_num, recycle?) do
+    GenServer.call(name, {:obsolete, min_log_num, recycle?})
+  end
+
   # ---------------- server ---------------
 
   @impl GenServer
@@ -64,7 +75,8 @@ defmodule ExWal.Manager.Failover do
       recycler: recycler,
       dynamic_sup: dynamic_sup,
       registry: registry,
-      monitor: nil
+      monitor: nil,
+      opts: opts
     }
 
     %Options{secondary: sc} = opts
@@ -73,7 +85,7 @@ defmodule ExWal.Manager.Failover do
     |> test_secondary_dir()
     |> case do
       :ok ->
-        {:ok, state, {:continue, {:monitor, opts}}}
+        {:ok, state, {:continue, :monitor}}
 
       {:error, reason} ->
         {:stop, reason}
@@ -90,7 +102,9 @@ defmodule ExWal.Manager.Failover do
   end
 
   @impl GenServer
-  def handle_continue({:monitor, opts}, state) do
+  def handle_continue(:monitor, state) do
+    %__MODULE__{opts: opts} = state
+
     {:ok, m} =
       with do
         %Options{primary: pr, secondary: sc} = opts
@@ -106,12 +120,12 @@ defmodule ExWal.Manager.Failover do
     {
       :noreply,
       %__MODULE__{state | monitor: m},
-      {:continue, {:initialize, opts}}
+      {:continue, :initialize}
     }
   end
 
-  def handle_continue({:initialize, opts}, state) do
-    %__MODULE__{recycler: recycler} = state
+  def handle_continue(:initialize, state) do
+    %__MODULE__{recycler: recycler, opts: opts} = state
 
     # recycler
     with do
@@ -176,13 +190,83 @@ defmodule ExWal.Manager.Failover do
 
   def handle_call({:create, _log_num}, _, state), do: {:reply, {:error, "previous writer not closed"}, state}
 
-  @impl GenServer
-  def handle_info({:writer_shutdown, a, _} = n, %__MODULE__{current_writer: {b, _}} = state) when a == b do
-    %__MODULE__{closed_writers: cw} = state
-    {:writer_shutdown, _, log} = n
-    cw = %{cw | a => log}
-    {:noreply, %__MODULE__{state | current_writer: nil, closed_writers: cw}}
+  def handle_call({:obsolete, _, true} = m, _, %__MODULE__{} = state) do
+    {_, min_log_num, _} = m
+
+    %__MODULE__{
+      closed_logs: cl,
+      initial_obsolete: to_delete,
+      recycler: recycler,
+      opts: opts
+    } = state
+
+    %Options{primary: p} = opts
+
+    # Recycle only the primary at index=0, if there was no failover,
+    # and synchronously closed. It may not be safe to recycle a file that is
+    # still being written to. And recycling when there was a failover may
+    # fill up the recycler with smaller log files. The restriction regarding
+    # index=0 is because logRecycler.Peek only exposes the
+    # DiskFileNum, and we need to use that to construct the path -- we could
+    # remove this restriction by changing the logRecycler interface, but we
+    # don't bother.
+    can_recycle_f = fn
+      %Models.VirtualLog{segments: [seg]} ->
+        %Models.Segment{index: i, dir: dir} = seg
+        i == 0 and dir == p[:dir]
+
+      _ ->
+        false
+    end
+
+    log_to_deletable = fn
+      %Models.VirtualLog{log_num: log_num, segments: segs} ->
+        Enum.map(segs, fn %Models.Segment{index: i, dir: dir, fs: fs} ->
+          %Models.Deletable{
+            log_num: log_num,
+            fs: fs,
+            path: Path.join(dir, Models.VirtualLog.filename(log_num, i))
+          }
+        end)
+    end
+
+    may_delete =
+      fn
+        log, true, d ->
+          recycler
+          |> Recycler.add(log)
+          |> if do
+            d
+          else
+            [log_to_deletable.(log) | d]
+          end
+
+        log, false, d ->
+          [log_to_deletable.(log) | d]
+      end
+
+    to_delete =
+      cl
+      |> Enum.filter(fn %Models.VirtualLog{log_num: log_num} -> log_num < min_log_num end)
+      |> Enum.reduce(to_delete, fn %Models.VirtualLog{} = log, acc ->
+        may_delete.(log, can_recycle_f.(log), acc)
+      end)
+      |> List.flatten()
+
+    cl = Enum.reject(cl, fn %Models.VirtualLog{log_num: log_num} -> log_num < min_log_num end)
+
+    {:reply, {:ok, to_delete}, %__MODULE__{state | initial_obsolete: [], closed_logs: cl}}
   end
+
+  @impl GenServer
+  def handle_info({:writer_shutdown, %Models.VirtualLog{log_num: a}} = n, %__MODULE__{current_writer: {b, _}} = state)
+      when a == b do
+    %__MODULE__{closed_logs: cl} = state
+    {:writer_shutdown, log} = n
+    {:noreply, %__MODULE__{state | current_writer: nil, closed_logs: [log | cl]}}
+  end
+
+  def handle_info({:writer_shutdown, _, _}, state), do: {:noreply, state}
 
   defp test_secondary_dir(fs: fs, dir: dir) do
     fs

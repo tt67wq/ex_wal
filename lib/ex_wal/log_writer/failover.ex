@@ -123,10 +123,10 @@ defmodule ExWal.LogWriter.Failover do
   end
 
   @impl GenServer
-  def terminate(reason, %__MODULE__{log_num: log_num, manager: m} = state) do
+  def terminate(reason, %__MODULE__{manager: m} = state) do
     may_log_reason(reason)
     close_writers(state)
-    send(m, {:writer_shutdown, log_num, get_virtual_log(state)})
+    send(m, {:writer_shutdown, get_virtual_log(state)})
   end
 
   @impl GenServer
