@@ -34,6 +34,26 @@ defmodule ExWal.LogWriter.Failover do
 
   @max_log_writer 10
 
+  @type t :: %__MODULE__{
+          name: GenServer.name(),
+          registry: GenServer.name(),
+          fs: ExWal.FS.t(),
+          log_num: non_neg_integer(),
+          writers: %{
+            # index => WriterAndRecorder
+            s: %{(index :: non_neg_integer()) => wr :: WriterAndRecorder.t()},
+            cnt: non_neg_integer()
+          },
+          q: [iodata()],
+          logical_offset: %LogicalOffset{
+            offset: non_neg_integer(),
+            latest_log_size: non_neg_integer(),
+            estimated_offset?: boolean()
+          },
+          observer: pid() | GenServer.name(),
+          manager: pid() | GenServer.name()
+        }
+
   defstruct name: nil,
             registry: nil,
             fs: nil,
@@ -48,12 +68,14 @@ defmodule ExWal.LogWriter.Failover do
               offset: 0,
               latest_log_size: 0,
               estimated_offset?: false
-            }
+            },
+            observer: nil,
+            manager: nil
 
-  def start_link({name, registry, fs, dir, log_num}) do
+  def start_link({name, registry, fs, dir, log_num, manager}) do
     GenServer.start_link(
       __MODULE__,
-      {name, registry, fs, dir, log_num},
+      {name, registry, fs, dir, log_num, manager},
       name: name
     )
   end
@@ -82,24 +104,32 @@ defmodule ExWal.LogWriter.Failover do
 
   # ---------------- server -----------------
 
-  def init({name, registry, fs, dir, log_num}) do
+  @impl GenServer
+  def init({name, registry, fs, dir, log_num, manager}) do
+    {:ok, observer} = Obeserver.start_link({:via, Registry, {registry, {:observer, log_num}}})
+
     {
       :ok,
       %__MODULE__{
         name: name,
         registry: registry,
         fs: fs,
-        log_num: log_num
+        log_num: log_num,
+        observer: observer,
+        manager: manager
       },
       {:continue, {:switch_dir, dir}}
     }
   end
 
-  def terminate(reason, state) do
+  @impl GenServer
+  def terminate(reason, %__MODULE__{log_num: log_num, manager: m} = state) do
     may_log_reason(reason)
     close_writers(state)
+    send(m, {:writer_shutdown, log_num, get_virtual_log(state)})
   end
 
+  @impl GenServer
   def handle_continue({:switch_dir, dir}, state) do
     dir
     |> do_switch_dir(state)
@@ -112,6 +142,7 @@ defmodule ExWal.LogWriter.Failover do
     end
   end
 
+  @impl GenServer
   def handle_call({:switch_dir, dir}, _, state) do
     dir
     |> do_switch_dir(state)
@@ -133,7 +164,11 @@ defmodule ExWal.LogWriter.Failover do
     {
       :reply,
       {:ok, offset},
-      %__MODULE__{state | logical_offset: %LogicalOffset{logical_offset | offset: offset}, q: [p | q]}
+      %__MODULE__{
+        state
+        | logical_offset: %LogicalOffset{logical_offset | offset: offset},
+          q: [p | q]
+      }
     }
   end
 
@@ -206,22 +241,7 @@ defmodule ExWal.LogWriter.Failover do
   end
 
   def handle_call(:get_log, _, state) do
-    %__MODULE__{
-      log_num: log_num,
-      writers: %{
-        s: s
-      }
-    } = state
-
-    segs =
-      s
-      |> Enum.map(fn {idx, wr} ->
-        %WriterAndRecorder{dir: dir, fs: fs} = wr
-        %Models.Segment{index: idx, dir: dir, fs: fs}
-      end)
-      |> Enum.sort_by(& &1.index)
-
-    {:reply, {:ok, %Models.VirtualLog{log_num: log_num, segments: segs}}, state}
+    {:reply, {:ok, get_virtual_log(state)}, state}
   end
 
   def handle_call(:current_observer, _, state) do
@@ -230,6 +250,7 @@ defmodule ExWal.LogWriter.Failover do
     {:reply, ob, state}
   end
 
+  @impl GenServer
   def handle_info({_task, {:switch_dir_notify, {:ok, _} = notify}}, state) do
     {:ok, {idx, wr}} = notify
     %__MODULE__{writers: writers, q: q} = state
@@ -251,19 +272,21 @@ defmodule ExWal.LogWriter.Failover do
   # ----------------- private funcs -----------------
 
   defp do_switch_dir(new_dir, state)
-  defp do_switch_dir(_, %__MODULE__{writers: %{cnt: @max_log_writer}} = state), do: {{:error, :normal}, state}
+
+  defp do_switch_dir(_, %__MODULE__{writers: %{cnt: @max_log_writer}} = state),
+    do: {{:error, "exceeded switching limit"}, state}
 
   defp do_switch_dir(new_dir, state) do
     %__MODULE__{
       fs: fs,
       log_num: log_num,
       registry: registry,
-      writers: %{cnt: idx}
+      writers: %{cnt: idx},
+      observer: observer
     } = state
 
     log_name = Path.join(new_dir, Models.VirtualLog.filename(log_num, idx))
     writer_name = {:via, Registry, {registry, {:writer, log_num, idx}}}
-    {:ok, observer} = Obeserver.start_link({:via, Registry, {registry, {:observer, log_num}}})
 
     # create writer asynchonously
     Task.async(fn ->
@@ -336,6 +359,18 @@ defmodule ExWal.LogWriter.Failover do
           Obeserver.record_end(ob, reason)
       end
     end)
+  end
+
+  defp get_virtual_log(%__MODULE__{log_num: log_num, writers: %{s: s}}) do
+    segs =
+      s
+      |> Enum.map(fn {idx, wr} ->
+        %WriterAndRecorder{dir: dir, fs: fs} = wr
+        %Models.Segment{index: idx, dir: dir, fs: fs}
+      end)
+      |> Enum.sort_by(& &1.index)
+
+    %Models.VirtualLog{log_num: log_num, segments: segs}
   end
 end
 

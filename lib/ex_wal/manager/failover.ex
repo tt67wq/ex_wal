@@ -21,8 +21,8 @@ defmodule ExWal.Manager.Failover do
           monitor: pid() | GenServer.name(),
           observer: pid() | GenServer.name(),
           initial_obsolete: [Models.Deletable.t()],
-          current_writer: ExWal.LogWriter.t(),
-          closed_writers: %{Models.VirtualLog.log_num() => ExWal.LogWriter.t()}
+          current_writer: {Models.VirtualLog.log_num(), ExWal.LogWriter.t()} | nil,
+          closed_writers: %{Models.VirtualLog.log_num() => Models.VirtualLog.t()}
         }
 
   defstruct name: nil,
@@ -144,6 +144,8 @@ defmodule ExWal.Manager.Failover do
       observer: ob
     } = state
 
+    s = self()
+
     writer_create_func = fn dir, fs ->
       name = {:via, Registry, {registry, {:failover_writer, log_num}}}
 
@@ -158,7 +160,8 @@ defmodule ExWal.Manager.Failover do
               fs,
               dir,
               log_num,
-              ob
+              ob,
+              s
             }
           }
         )
@@ -168,18 +171,18 @@ defmodule ExWal.Manager.Failover do
 
     {:ok, w} = Monitor.new_writer(monitor, writer_create_func)
 
-    {:reply, {:ok, w}, %__MODULE__{state | current_writer: w}}
+    {:reply, {:ok, w}, %__MODULE__{state | current_writer: {log_num, w}}}
   end
 
   def handle_call({:create, _log_num}, _, state), do: {:reply, {:error, "previous writer not closed"}, state}
 
-  # def handle_call({:obsolete, min_log_num, true}, _from, state) do
-  #   %__MODULE__{
-  #     recycler: recycler,
-  #     initial_obsolete: to_del,
-  #   } = state
-
-  # end
+  @impl GenServer
+  def handle_info({:writer_shutdown, a, _} = n, %__MODULE__{current_writer: {b, _}} = state) when a == b do
+    %__MODULE__{closed_writers: cw} = state
+    {:writer_shutdown, _, log} = n
+    cw = %{cw | a => log}
+    {:noreply, %__MODULE__{state | current_writer: nil, closed_writers: cw}}
+  end
 
   defp test_secondary_dir(fs: fs, dir: dir) do
     fs
