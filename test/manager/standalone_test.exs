@@ -7,6 +7,7 @@ defmodule Manager.StandaloneTest do
   alias ExWal.FS.Syncing
   alias ExWal.LogReader
   alias ExWal.LogWriter
+  alias ExWal.Manager.Options
   alias ExWal.Manager.Standalone
 
   @path "./tmp/manager_test"
@@ -20,7 +21,6 @@ defmodule Manager.StandaloneTest do
 
   setup_all do
     default = %Default{}
-    start_supervised!({ExWal.Recycler.ETS, :test_recycler})
     start_supervised!({Registry, keys: :unique, name: :test_registry})
     start_supervised!({DynamicSupervisor, name: :test_dynamic_sup})
     start_supervised!({Syncing, {:test_fs, default, :test_dynamic_sup, :test_registry}})
@@ -29,11 +29,14 @@ defmodule Manager.StandaloneTest do
       ExWal.Manager.Standalone,
       {
         :test_manager,
-        ExWal.Recycler.ETS.get(:test_recycler),
         :test_dynamic_sup,
         :test_registry,
-        Syncing.get(:test_fs),
-        @path
+        %Options{
+          primary: [
+            fs: Syncing.get(:test_fs),
+            dir: @path
+          ]
+        }
       }
     })
 
