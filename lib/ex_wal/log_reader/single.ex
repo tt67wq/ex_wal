@@ -121,4 +121,8 @@ defimpl ExWal.LogReader, for: ExWal.LogReader.Single do
   def recovery(%Single{name: name}) do
     Single.recovery(name)
   end
+
+  def stop(%Single{name: name}) do
+    Single.stop(name)
+  end
 end

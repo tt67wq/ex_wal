@@ -12,4 +12,7 @@ defprotocol ExWal.LogReader do
 
   @spec recovery(t()) :: :ok
   def recovery(impl)
+
+  @spec stop(t()) :: :ok
+  def stop(impl)
 end

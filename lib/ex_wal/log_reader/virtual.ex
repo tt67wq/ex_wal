@@ -24,10 +24,21 @@ defmodule ExWal.LogReader.Virtual do
   @spec recovery(Agent.name()) :: :ok
   def recovery(name), do: Agent.get(name, __MODULE__, :handle_recovery, [])
 
+  def stop(name) do
+    Agent.get(name, __MODULE__, :handle_closed, [])
+    Agent.stop(name)
+  end
+
   # ---------------- handlers ----------------
 
   def init(name, registry, vlog) do
     %__MODULE__{name: name, registry: registry, virtual_log: vlog}
+  end
+
+  def handle_closed(%__MODULE__{reader: nil}), do: :ok
+
+  def handle_closed(%__MODULE__{reader: r}) do
+    ExWal.LogReader.stop(r)
   end
 
   def handle_next(state)
@@ -98,5 +109,9 @@ defimpl ExWal.LogReader, for: ExWal.LogReader.Virtual do
 
   def recovery(%Virtual{name: name}) do
     Virtual.recovery(name)
+  end
+
+  def stop(%Virtual{name: name}) do
+    Virtual.stop(name)
   end
 end
