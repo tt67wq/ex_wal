@@ -23,29 +23,30 @@ end
 
 Benchee.run(
   %{
-    "ExWal.write/2" => fn entries ->
-      BenchmarkApp.write(entries)
+    "write" => fn {_, writer, data} ->
+      ExWal.LogWriter.write_record(writer, data, timeout: 10000)
     end
   },
   inputs: %{
-    "small value, nosync" => {small, [path: data_dir, nosync: true, segment_size: small_segment_size]},
-    "small value" => {small, [path: data_dir, segment_size: big_segment_size]},
-    "1KB value" => {one_kb, [path: data_dir, segment_size: big_segment_size]},
-    "1MB value" => {one_mb, [path: data_dir, segment_size: big_segment_size]},
-    "10MB value" => {ten_mb, [path: data_dir, segment_size: huge_segment_size]}
+    "small value, nosync" => {small, []},
+    "small value" => {small, []},
+    "1KB value" => {one_kb, []},
+    "1MB value" => {one_mb, []},
+    "10MB value" => {ten_mb, []}
   },
-  before_scenario: fn {datas, options} ->
+  before_scenario: fn {data, options} ->
     Application.put_env(:bench, BenchmarkApp, options)
     {:ok, _} = BenchmarkApp.start_link()
-    datas
+    {:ok, manager} = BenchmarkApp.manager(data_dir, :standalone)
+    {:ok, writer} = ExWal.Manager.create(manager, 1)
+    {manager, writer, data}
   end,
-  before_each: fn value ->
-    idx = BenchmarkApp.last_index()
-    [ExWal.Models.Entry.new(idx + 1, value)]
+  before_each: fn {manager, writer, data} ->
+    {manager, writer, data}
   end,
-  after_scenario: fn _ ->
-    IO.puts("#{BenchmarkApp.last_index()} entries written to WAL.")
-    BenchmarkApp.stop()
+  after_scenario: fn {manager, writer, _} ->
+    ExWal.LogWriter.stop(writer)
+    ExWal.Manager.close(manager)
     cleanup.()
   end
 )

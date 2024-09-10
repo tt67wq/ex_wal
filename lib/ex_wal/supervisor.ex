@@ -13,8 +13,8 @@ defmodule ExWal.Supervisor do
     children =
       [
         {DynamicSupervisor, name: dynamic_sup_name(name), strategy: :one_for_one},
-        {Registry, name: registry_name(name, :fs)},
-        {Registry, name: registry_name(name, :core)},
+        {Registry, name: registry_name(name, :fs), keys: :unique},
+        {Registry, name: registry_name(name, :core), keys: :unique},
         {
           ExWal.FS.Syncing,
           {
@@ -27,10 +27,15 @@ defmodule ExWal.Supervisor do
         {
           ExWal.Core,
           {
-            core_name(name),
+            name,
             dynamic_sup_name(name),
             registry_name(name, :core),
-            name |> syncing_name() |> ExWal.FS.Syncing.get()
+            ExWal.FS.Syncing.init(
+              syncing_name(name),
+              %ExWal.FS.Default{},
+              dynamic_sup_name(name),
+              registry_name(name, :fs)
+            )
           }
         }
       ]
@@ -52,9 +57,5 @@ defmodule ExWal.Supervisor do
 
   defp syncing_name(name) do
     Module.concat(name, FS.Syncing)
-  end
-
-  defp core_name(name) do
-    Module.concat(name, Core)
   end
 end

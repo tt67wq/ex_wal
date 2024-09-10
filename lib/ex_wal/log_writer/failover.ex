@@ -82,10 +82,14 @@ defmodule ExWal.LogWriter.Failover do
 
   def get(name), do: %__MODULE__{name: name}
 
-  @spec write_record(name :: GenServer.name(), bytes :: binary()) ::
+  @spec write_record(
+          name :: GenServer.name(),
+          bytes :: binary(),
+          opts :: keyword()
+        ) ::
           {:ok, written_offset :: non_neg_integer()} | {:error, reason :: any()}
-  def write_record(name, bytes) do
-    GenServer.call(name, {:sync_writes, bytes})
+  def write_record(name, bytes, opts \\ []) do
+    GenServer.call(name, {:sync_writes, bytes}, Keyword.get(opts, :timeout, 5000))
   end
 
   @spec stop(name :: GenServer.name()) :: :ok | {:error, reason :: any()}
@@ -377,8 +381,8 @@ end
 defimpl ExWal.LogWriter, for: ExWal.LogWriter.Failover do
   alias ExWal.LogWriter.Failover
 
-  def write_record(%Failover{name: name}, bytes) do
-    Failover.write_record(name, bytes)
+  def write_record(%Failover{name: name}, bytes, opts) do
+    Failover.write_record(name, bytes, opts)
   end
 
   def stop(%Failover{name: name}) do

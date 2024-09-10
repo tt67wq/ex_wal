@@ -8,9 +8,13 @@ defprotocol ExWal.LogWriter do
   @doc """
   write_record writes a complete record. The record is asynchronously persisted to the underlying writer.
   """
-  @spec write_record(impl :: t(), bytes :: binary()) ::
+  @spec write_record(
+          impl :: t(),
+          bytes :: binary(),
+          opts :: keyword()
+        ) ::
           {:ok, written_bytes :: non_neg_integer()} | {:error, reason :: term()}
-  def write_record(impl, bytes)
+  def write_record(impl, bytes, opts \\ [])
 
   @doc """
   stop stops the writer.

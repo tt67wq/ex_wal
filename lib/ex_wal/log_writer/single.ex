@@ -19,6 +19,7 @@ defmodule ExWal.LogWriter.Single do
 
   @block_size 32 * 1024
   @legacy_header_size 7
+  # 11
   @recyclable_header_size @legacy_header_size + 4
 
   @type t :: %__MODULE__{
@@ -42,8 +43,8 @@ defmodule ExWal.LogWriter.Single do
     GenServer.stop(name)
   end
 
-  def write_record(name, bytes) do
-    GenServer.call(name, {:sync_write, bytes})
+  def write_record(name, bytes, opts \\ []) do
+    GenServer.call(name, {:sync_write, bytes}, Keyword.get(opts, :timeout, 5000))
   end
 
   # ------------ server ------------
@@ -57,7 +58,7 @@ defmodule ExWal.LogWriter.Single do
   def terminate(:normal, state) do
     state
     |> emit_eof_trailer()
-    |> sync_flush()
+    |> sync_flush(nil)
   end
 
   def terminate(reason, _state) do
@@ -65,17 +66,17 @@ defmodule ExWal.LogWriter.Single do
   end
 
   @impl GenServer
-  def handle_call({:sync_write, p}, _from, state) do
+  def handle_call({:sync_write, p}, from, state) do
     state = emit_fragment(state, 0, p)
-    flush(state)
-    {:reply, {:ok, written_offset(state)}, state}
+    flush(state, from)
+    {:noreply, state}
   end
 
   def handle_call(:self, _, state), do: {:reply, state, state}
 
   @impl GenServer
   def handle_info({_task, {:flush_task, ret}}, state) do
-    {:ok, flushed_pending_nums, {hot_block, hot_block_num}} = ret
+    {:ok, flushed_pending_nums, hot_block, hot_block_num, from} = ret
     %__MODULE__{pending: pending, block: block, block_num: block_num} = state
 
     new_pending = Map.drop(pending, flushed_pending_nums)
@@ -95,6 +96,12 @@ defmodule ExWal.LogWriter.Single do
         %__MODULE__{state | pending: Map.put(new_pending, hot_block_num, b)}
       end
 
+    from
+    |> is_nil()
+    |> unless do
+      GenServer.reply(from, {:ok, written_offset(state)})
+    end
+
     {:noreply, state}
   end
 
@@ -102,7 +109,7 @@ defmodule ExWal.LogWriter.Single do
 
   # ------------ private methods ------------
 
-  defp flush(state) do
+  defp flush(state, from) do
     %__MODULE__{block: block, block_num: block_num, pending: pending, file: file} = state
 
     ns =
@@ -111,7 +118,7 @@ defmodule ExWal.LogWriter.Single do
       |> Enum.sort(:desc)
 
     to_flush =
-      Enum.map(ns, fn n -> Map.fetch!(pending, n) end)
+      Enum.map(ns, fn n -> pending |> Map.fetch!(n) |> Block.flushable() end)
 
     flush_content =
       [Block.flushable(block) | to_flush]
@@ -120,22 +127,22 @@ defmodule ExWal.LogWriter.Single do
 
     Task.async(fn ->
       :ok = ExWal.File.write(file, flush_content)
-      {:flush_task, {:ok, ns, {block, block_num}}}
+      {:flush_task, {:ok, ns, block, block_num, from}}
     end)
   end
 
-  defp sync_flush(state) do
+  defp sync_flush(state, from) do
     state
-    |> flush()
+    |> flush(from)
     |> Task.await()
   end
 
   defp emit_fragment(state, n, p)
   defp emit_fragment(state, n, <<>>) when n > 0, do: state
 
-  defp emit_fragment(state, n, p) do
+  defp emit_fragment(%__MODULE__{block: %Block{written: written}} = state, n, p)
+       when @block_size - @recyclable_header_size > written do
     %__MODULE__{log_num: log_num, block: block} = state
-    %Block{written: written} = block
     rest_room = @block_size - written - @recyclable_header_size
 
     type = recyclable_flag(rest_room >= byte_size(p), n == 0)
@@ -153,8 +160,16 @@ defmodule ExWal.LogWriter.Single do
     block = Block.append(block, buf)
 
     state
-    |> may_queue_block(block, @block_size - written < @recyclable_header_size)
+    |> may_queue_block(block, false)
     |> emit_fragment(n + 1, rest_p)
+  end
+
+  defp emit_fragment(state, n, p) do
+    %__MODULE__{block: block} = state
+
+    state
+    |> may_queue_block(block, true)
+    |> emit_fragment(n + 1, p)
   end
 
   defp emit_eof_trailer(state) do
@@ -204,8 +219,8 @@ end
 defimpl ExWal.LogWriter, for: ExWal.LogWriter.Single do
   alias ExWal.LogWriter.Single
 
-  def write_record(%Single{name: name}, bytes) do
-    Single.write_record(name, bytes)
+  def write_record(%Single{name: name}, bytes, opts) do
+    Single.write_record(name, bytes, opts)
   end
 
   def stop(%Single{name: name}) do

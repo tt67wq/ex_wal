@@ -8,7 +8,7 @@ defmodule ExWal.FS.Syncing do
   alias ExWal.FS
 
   @type t :: %__MODULE__{
-          name: String.t(),
+          name: GenServer.name(),
           fs: ExWal.FS.t(),
           dynamic: atom(),
           registry: atom()
@@ -19,8 +19,6 @@ defmodule ExWal.FS.Syncing do
   def start_link({name, fs, dynamic, registry}) do
     Agent.start_link(__MODULE__, :init, [name, fs, dynamic, registry], name: name)
   end
-
-  def get(name), do: Agent.get(name, fn state -> state end)
 
   def create(name, fname), do: Agent.get(name, __MODULE__, :handle_create, [fname])
 

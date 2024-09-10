@@ -14,6 +14,8 @@ defmodule ExWal.Models.Block do
 
   def new, do: %__MODULE__{written: 0, flushed: 0, buf: [], flushable: []}
 
+  def append(m, ""), do: m
+
   def append(%__MODULE__{written: w, buf: buf, flushable: flushable} = m, content) do
     %__MODULE__{m | written: w + byte_size(content), buf: [content | buf], flushable: [content | flushable]}
   end
@@ -53,6 +55,6 @@ defmodule ExWal.Models.Block do
       |> flushable()
       |> binary_slice(f1, f2 - f1)
 
-    %__MODULE__{m | flushed: f2, flushable: fa}
+    %__MODULE__{m | flushed: f2, flushable: [fa]}
   end
 end
