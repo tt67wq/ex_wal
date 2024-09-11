@@ -103,7 +103,7 @@ defmodule ExWal.Models.RecyclableRecord do
     <<crc::size(32), size::size(16), type, log_number::size(32), rest::binary>> = buf
 
     with :ok <- verify_type(type),
-         <<payload::bytes-size(size), rest::binary>> = rest,
+         {<<payload::bytes-size(size), rest::binary>>, _, _} = {rest, size, crc},
          m = %__MODULE__{crc: crc, size: size, type: type, log_number: log_number, payload: payload},
          :ok <- verify_length(m),
          :ok <- verify_checksum(m),
@@ -111,9 +111,7 @@ defmodule ExWal.Models.RecyclableRecord do
   end
 
   # no room for another record, maybe aligned to next block
-  def parse(_buf) do
-    {:ok, nil, <<>>}
-  end
+  def parse(buf), do: {:ok, nil, buf}
 
   @spec last_chunk?(t()) :: boolean()
   def last_chunk?(%__MODULE__{type: type}), do: type in [@recyclable_full_chunk_type, @recyclable_last_chunk_type]
@@ -151,5 +149,13 @@ defmodule ExWal.Models.RecyclableRecord do
       _ ->
         {:error, :checksum_mismatch}
     end
+  end
+end
+
+defimpl Inspect, for: ExWal.Models.RecyclableRecord do
+  alias ExWal.Models.RecyclableRecord
+
+  def inspect(%RecyclableRecord{type: type, log_number: log_number, size: size, crc: crc, payload: payload}, _opts) do
+    "#<ExWal.Models.RecyclableRecord type=#{type} log_number=#{log_number} size=#{size} crc=#{crc}, payload=#{payload}>"
   end
 end

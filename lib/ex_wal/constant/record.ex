@@ -13,7 +13,7 @@ defmodule ExWal.Constant.Record do
   const(:recyclable_middle_chunk_type, 7)
   const(:recyclable_last_chunk_type, 8)
 
-  @block_size 32 * 1024
+  @block_size 1024 * 32
   @legacy_header_size 7
   @recyclable_header_size @legacy_header_size + 4
 

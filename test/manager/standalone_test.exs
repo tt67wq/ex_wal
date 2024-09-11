@@ -61,10 +61,21 @@ defmodule Manager.StandaloneTest do
   test "complex" do
     assert {:ok, writer} = Standalone.create(:test_manager, 2)
 
-    [min_length: 10, max_length: 1000]
-    |> StreamData.binary()
-    |> Enum.take(10_000)
+    # [length: 10, max_length: 1000]
+    # |> StreamData.binary()
+    # |> Enum.take(10_000)
+    1..50
+    |> Enum.map(fn x ->
+      s =
+        x
+        |> Integer.to_string()
+        |> String.pad_leading(4, "0")
+
+      "Hello Elixir! I am a developer. I love Elixir #{s}."
+    end)
     |> Enum.each(fn data -> LogWriter.write_record(writer, data) end)
+
+    Process.sleep(1000)
 
     assert {:ok, reader} = Standalone.open_for_read(:test_manager, 2)
 
@@ -85,7 +96,7 @@ defmodule Manager.StandaloneTest do
       # raise ExWal.Exception, message: "read failed: #{inspect(reason)}"
 
       bin ->
-        Logger.debug("read #{inspect(bin)}")
+        IO.puts(bin)
         keep_reading(reader)
     end
   end

@@ -6,20 +6,21 @@ defmodule ExWal.File.Syncing do
   @type t :: %__MODULE__{
           name: String.t(),
           file: ExWal.File.t(),
-          bytes_per_sync: non_neg_integer,
           offset: non_neg_integer,
           sync_offset: non_neg_integer
         }
 
-  defstruct name: nil, file: nil, bytes_per_sync: 0, offset: 0, sync_offset: 0
+  defstruct name: nil, file: nil, offset: 0, sync_offset: 0
 
   # 1MB
   @sync_range_buffer Bitwise.bsl(1, 20)
   # 4KB
   @sync_range_alignment Bitwise.bsl(4, 10)
+  # 4k
+  @bytes_per_sync Bitwise.bsl(4, 10)
 
-  def start_link({name, file, bytes_per_sync}) do
-    Agent.start_link(__MODULE__, :init, [name, file, bytes_per_sync], name: name)
+  def start_link({name, file}) do
+    Agent.start_link(__MODULE__, :init, [name, file], name: name)
   end
 
   @spec get(Agent.name()) :: t()
@@ -34,8 +35,8 @@ defmodule ExWal.File.Syncing do
 
   # ---------------- handler ------------
 
-  def init(name, file, bytes_per_sync) do
-    %__MODULE__{name: name, file: file, bytes_per_sync: bytes_per_sync}
+  def init(name, file) do
+    %__MODULE__{name: name, file: file}
   end
 
   def handle_write(%__MODULE__{file: file, offset: offset} = state, bytes) do
@@ -83,8 +84,8 @@ defmodule ExWal.File.Syncing do
   defp syncable?(0, _state), do: false
 
   defp syncable?(sync_to_offset, state) do
-    %__MODULE__{sync_offset: sync_offset, bytes_per_sync: bytes_per_sync} = state
-    sync_to_offset - sync_offset >= bytes_per_sync
+    %__MODULE__{sync_offset: sync_offset} = state
+    sync_to_offset - sync_offset >= @bytes_per_sync
   end
 
   defp set_offset(state, offset)

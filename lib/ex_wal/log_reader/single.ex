@@ -81,7 +81,7 @@ defmodule ExWal.LogReader.Single do
     ExWal.File.close(file)
   end
 
-  defp iter_read(%__MODULE__{buf: buf} = state, acc) do
+  defp iter_read(%__MODULE__{buf: buf, file: file} = state, acc) do
     buf
     |> Models.RecyclableRecord.parse()
     |> case do
@@ -94,15 +94,27 @@ defmodule ExWal.LogReader.Single do
           iter_read(%__MODULE__{state | buf: rest}, [p | acc])
         end
 
-      {:ok, nil, _} ->
-        {make_resp(acc), %__MODULE__{state | buf: <<>>}}
+      {:ok, nil, rest} ->
+        # may aligned to next block
+        file
+        |> ExWal.File.read(@block_size)
+        |> case do
+          {:ok, buf} ->
+            iter_read(%__MODULE__{state | buf: rest <> buf}, acc)
+
+          :eof ->
+            {:eof, state}
+
+          err ->
+            {err, state}
+        end
 
       err ->
         {err, state}
     end
   end
 
-  defp make_resp([]), do: <<>>
+  # defp make_resp([]), do: <<>>
 
   defp make_resp(chunks) do
     chunks

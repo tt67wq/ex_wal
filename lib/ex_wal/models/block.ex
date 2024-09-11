@@ -3,24 +3,32 @@ defmodule ExWal.Models.Block do
   A block of data in a WAL file.
   """
 
-  defstruct written: 0, flushed: 0, buf: [], flushable: []
+  require ExWal.Constant.Record
+
+  defstruct written: 0, flushed: 0, flushable: []
 
   @type t :: %__MODULE__{
           written: non_neg_integer(),
           flushed: non_neg_integer(),
-          buf: iodata(),
-          flushable: iodata()
+          flushable: [iodata()]
         }
 
-  def new, do: %__MODULE__{written: 0, flushed: 0, buf: [], flushable: []}
+  @block_size ExWal.Constant.Record.block_size()
+
+  def new, do: %__MODULE__{written: 0, flushed: 0, flushable: []}
 
   def append(m, ""), do: m
 
-  def append(%__MODULE__{written: w, buf: buf, flushable: flushable} = m, content) do
-    %__MODULE__{m | written: w + byte_size(content), buf: [content | buf], flushable: [content | flushable]}
+  def append(%__MODULE__{written: w} = m, content) when w + byte_size(content) <= @block_size do
+    %__MODULE__{written: w, flushable: flushable} = m
+    %__MODULE__{m | written: w + byte_size(content), flushable: [content | flushable]}
   end
 
-  def flushable(%__MODULE__{flushable: f}) when is_binary(f), do: f
+  def append(m, content) do
+    %__MODULE__{written: w} = m
+
+    raise(ExWal.Exception, message: "block is full", details: [written: w, content_size: byte_size(content)])
+  end
 
   def flushable(%__MODULE__{flushable: f}) do
     f

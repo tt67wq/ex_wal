@@ -33,14 +33,14 @@ defmodule ExWal.FS.Syncing do
   def handle_create(%__MODULE__{fs: fs, dynamic: dynamic, registry: registry}, name) do
     {:ok, file} = FS.create(fs, name)
     file_name = file_name(registry, name)
-    {:ok, _} = DynamicSupervisor.start_child(dynamic, {ExWal.File.Syncing, {file_name, file, 1024 * 1024}})
+    {:ok, _} = DynamicSupervisor.start_child(dynamic, {ExWal.File.Syncing, {file_name, file}})
     {:ok, ExWal.File.Syncing.get(file_name)}
   end
 
   def handle_open_read_write(%__MODULE__{fs: fs, dynamic: dynamic, registry: registry}, name) do
     {:ok, file} = FS.open_read_write(fs, name)
     file_name = file_name(registry, name)
-    {:ok, _} = DynamicSupervisor.start_child(dynamic, {ExWal.File.Syncing, {file_name, file, 1024 * 1024}})
+    {:ok, _} = DynamicSupervisor.start_child(dynamic, {ExWal.File.Syncing, {file_name, file}})
     {:ok, ExWal.File.Syncing.get(file_name)}
   end
 
