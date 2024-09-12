@@ -40,15 +40,14 @@ defmodule ExWal.Manager.Failover do
 
   @spec start_link({
           name :: GenServer.name(),
-          recycler :: ExWal.Recycler.t(),
           dynamic_sup :: GenServer.name(),
           registry :: GenServer.name(),
           opts :: Options.t()
         }) :: GenServer.on_start()
-  def start_link({name, recycler, dynamic_sup, registry, opts}) do
+  def start_link({name, dynamic_sup, registry, opts}) do
     GenServer.start_link(
       __MODULE__,
-      {name, recycler, dynamic_sup, registry, opts},
+      {name, dynamic_sup, registry, opts},
       name: name
     )
   end
@@ -79,13 +78,15 @@ defmodule ExWal.Manager.Failover do
     GenServer.call(name, :list)
   end
 
+  @spec get(name :: GenServer.name()) :: {:ok, ExWal.Manager.t()} | {:error, reason :: any()}
+  def get(name), do: GenServer.call(name, :get)
+
   # ---------------- server ---------------
 
   @impl GenServer
-  def init({name, recycler, dynamic_sup, registry, opts}) do
+  def init({name, dynamic_sup, registry, opts}) do
     state = %__MODULE__{
       name: name,
-      recycler: recycler,
       dynamic_sup: dynamic_sup,
       registry: registry,
       monitor: nil,
@@ -133,8 +134,25 @@ defmodule ExWal.Manager.Failover do
     {
       :noreply,
       %__MODULE__{state | monitor: m},
-      {:continue, :initialize}
+      {:continue, :recycler}
     }
+  end
+
+  def handle_continue(:recycler, state) do
+    %__MODULE__{
+      registry: registry,
+      opts: opts
+    } = state
+
+    recycler =
+      with do
+        %Options{primary: pr} = opts
+        rn = {:via, Registry, {registry, {:recycler, pr[:dir]}}}
+        {:ok, _} = Recycler.ETS.start_link(rn)
+        Recycler.ETS.get(rn)
+      end
+
+    {:noreply, %__MODULE__{state | recycler: recycler}, {:continue, :initialize}}
   end
 
   def handle_continue(:initialize, state) do
@@ -273,6 +291,8 @@ defmodule ExWal.Manager.Failover do
     {:ok, log} = LogWriter.Failover.get_log(w.name)
     {:reply, {:ok, [log | cl]}, state}
   end
+
+  def handle_call(:get, _from, state), do: {:reply, state, state}
 
   @impl GenServer
   def handle_info({:writer_shutdown, %Models.VirtualLog{log_num: a}} = n, %__MODULE__{current_writer: {b, _}} = state)

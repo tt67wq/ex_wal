@@ -7,8 +7,8 @@ defmodule Manager.StandaloneTest do
   alias ExWal.FS.Syncing
   alias ExWal.LogReader
   alias ExWal.LogWriter
+  alias ExWal.Manager
   alias ExWal.Manager.Options
-  alias ExWal.Manager.Standalone
 
   require Logger
 
@@ -30,36 +30,28 @@ defmodule Manager.StandaloneTest do
     fs = Syncing.init(:test_fs, default, :test_dynamic_sup, :test_registry)
 
     start_supervised!({
-      ExWal.Manager.Standalone,
+      ExWal.Core,
       {
-        :test_manager,
+        :test_core,
         :test_dynamic_sup,
-        :test_registry,
-        %Options{
-          primary: [
-            fs: fs,
-            dir: @path
-          ]
-        }
+        :test_registry
       }
     })
 
-    :ok
+    [fs: fs]
   end
 
-  # test "simple" do
-  #   assert {:ok, writer} = Standalone.create(:test_manager, 1)
-  #   assert {:ok, _} = LogWriter.write_record(writer, "test manager")
-  #   assert {:ok, [%ExWal.Models.VirtualLog{log_num: 1}]} = Standalone.list(:test_manager)
-  #   assert {:ok, reader} = Standalone.open_for_read(:test_manager, 1)
-  #   assert "test manager" = LogReader.next(reader)
-  #   assert :eof = LogReader.next(reader)
-  #   ExWal.LogWriter.stop(writer)
-  #   ExWal.LogReader.stop(reader)
-  # end
+  test "main", %{fs: fs} do
+    opts = %Options{
+      primary: %{
+        fs: fs,
+        dir: @path
+      }
+    }
 
-  test "complex" do
-    assert {:ok, writer} = Standalone.create(:test_manager, 2)
+    {:ok, m} = ExWal.Core.manager(:test_core, :standalone, "standalone_manager", opts)
+
+    assert {:ok, writer} = Manager.create(m, 2)
 
     # [length: 10, max_length: 1000]
     # |> StreamData.binary()
@@ -77,7 +69,9 @@ defmodule Manager.StandaloneTest do
 
     Process.sleep(1000)
 
-    assert {:ok, reader} = Standalone.open_for_read(:test_manager, 2)
+    assert {:ok, [log | _]} = Manager.list(m)
+
+    assert {:ok, reader} = ExWal.Core.open_for_read(:test_core, log)
 
     keep_reading(reader)
 

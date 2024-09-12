@@ -8,7 +8,7 @@ defmodule ExWal.Manager.Options do
               fs: nil,
               dir: ""
             ],
-            max_num_recyclable_logs: 0
+            max_num_recyclable_logs: 10
 
   @type t :: %__MODULE__{
           primary: [

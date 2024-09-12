@@ -21,8 +21,13 @@ defmodule ExWal.LogReader.Single do
 
   defstruct name: nil, log_num: 0, file: nil, buf: <<>>
 
-  def start_link({name, log_num, file_path, fs}) do
-    Agent.start_link(__MODULE__, :init, [name, log_num, file_path, fs], name: name)
+  @spec start_link({
+          name :: Agent.name(),
+          log_num :: Models.VirtualLog.log_num(),
+          seg :: Models.Segment.t()
+        }) :: Agent.on_start()
+  def start_link({name, log_num, seg}) do
+    Agent.start_link(__MODULE__, :init, [name, log_num, seg], name: name)
   end
 
   @spec get(Agent.name() | pid()) :: t()
@@ -44,8 +49,9 @@ defmodule ExWal.LogReader.Single do
   end
 
   # ------------- handlers -------------
-  def init(name, log_num, file_path, fs) do
-    {:ok, file} = ExWal.FS.open(fs, file_path, [])
+  def init(name, log_num, %Models.Segment{index: index, dir: dir, fs: fs}) do
+    path = Path.join(dir, Models.VirtualLog.filename(log_num, index))
+    {:ok, file} = ExWal.FS.open(fs, path, [])
     %__MODULE__{name: name, log_num: log_num, file: file}
   end
 

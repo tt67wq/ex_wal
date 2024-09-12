@@ -12,6 +12,11 @@ defmodule ExWal.LogReader.Virtual do
         }
   defstruct name: nil, registry: nil, virtual_log: nil, reader: nil
 
+  @spec start_link({
+          name :: Agent.name(),
+          registry :: atom(),
+          vlog :: VirtualLog.t()
+        }) :: Agent.on_start()
   def start_link({name, registry, vlog}) do
     Agent.start_link(__MODULE__, :init, [name, registry, vlog], name: name)
   end
@@ -73,14 +78,14 @@ defmodule ExWal.LogReader.Virtual do
     %VirtualLog{
       log_num: log_num,
       segments: [
-        %Segment{index: index, dir: dir, fs: fs} | segs
+        seg | segs
       ]
     } = vlog
 
-    filename = VirtualLog.filename(log_num, index)
-    name = {:via, Registry, {registry, {:reader, filename}}}
+    %Segment{index: i} = seg
 
-    {:ok, _} = ExWal.LogReader.Single.start_link({name, log_num, Path.join(dir, filename), fs})
+    name = {:via, Registry, {registry, {:single_reader, {log_num, i}}}}
+    {:ok, _} = ExWal.LogReader.Single.start_link({name, log_num, seg})
 
     {:ok, %__MODULE__{state | reader: name, virtual_log: %VirtualLog{vlog | segments: segs}}}
   end

@@ -75,12 +75,6 @@ defmodule ExWal.Manager.Standalone do
     GenServer.call(name, :list)
   end
 
-  @spec open_for_read(name :: GenServer.name(), log_num :: ExWal.Models.VirtualLog.log_num()) ::
-          {:ok, ExWal.LogReader.t()} | {:error, reason :: any()}
-  def open_for_read(name, log_num) do
-    GenServer.call(name, {:open_for_read, log_num})
-  end
-
   # --------------------- server -----------------
 
   @impl GenServer
@@ -210,7 +204,7 @@ defmodule ExWal.Manager.Standalone do
     %__MODULE__{
       recycler: recycler,
       queue: q,
-      initial_obsolete: init_ob,
+      initial_obsolete: init_ob
     } = state
 
     to_del =
@@ -263,38 +257,6 @@ defmodule ExWal.Manager.Standalone do
     %__MODULE__{queue: q} = state
 
     {:reply, {:ok, q}, state}
-  end
-
-  def handle_call({:open_for_read, log_num}, _from, state) do
-    %__MODULE__{queue: q} = state
-
-    exist? =
-      q
-      |> Enum.map(fn %VirtualLog{log_num: n} -> n end)
-      |> Enum.member?(log_num)
-
-    {:reply, start_log_reader(log_num, exist?, state), state}
-  end
-
-  defp start_log_reader(log_num, log_exists?, state)
-
-  defp start_log_reader(_log_num, false, _state), do: {:error, :not_found}
-
-  defp start_log_reader(log_num, true, state) do
-    %__MODULE__{
-      registry: registry,
-      dynamic_sup: dynamic_sup,
-      dirname: dirname,
-      fs: fs
-    } = state
-
-    filepath = Path.join(dirname, Models.VirtualLog.filename(log_num, 0))
-    reader_name = {:via, Registry, {registry, {:single_reader, log_num}}}
-
-    {:ok, reader_pid} =
-      DynamicSupervisor.start_child(dynamic_sup, {ExWal.LogReader.Single, {reader_name, log_num, filepath, fs}})
-
-    {:ok, ExWal.LogReader.Single.get(reader_pid)}
   end
 
   defp create_or_reuse(log_name, %__MODULE__{fs: fs, recycler: recycler, dirname: dirname}) do
