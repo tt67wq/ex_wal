@@ -203,6 +203,26 @@ defmodule ExWal.Manager.Failover do
 
   def handle_call({:create, _log_num}, _, state), do: {:reply, {:error, "previous writer not closed"}, state}
 
+  def handle_call({:obsolete, _, false} = m, _, %__MODULE__{} = state) do
+    {_, min_log_num, _} = m
+
+    %__MODULE__{
+      closed_logs: cl,
+      initial_obsolete: to_delete
+    } = state
+
+    to_delete =
+      cl
+      |> Enum.filter(fn %Models.VirtualLog{log_num: log_num} -> log_num < min_log_num end)
+      |> Enum.reduce(to_delete, fn %Models.VirtualLog{} = log, acc ->
+        [log_to_deletable(log) | acc]
+      end)
+      |> List.flatten()
+
+    cl = Enum.reject(cl, fn %Models.VirtualLog{log_num: log_num} -> log_num < min_log_num end)
+    {:reply, {:ok, to_delete}, %__MODULE__{state | initial_obsolete: [], closed_logs: cl}}
+  end
+
   def handle_call({:obsolete, _, true} = m, _, %__MODULE__{} = state) do
     {_, min_log_num, _} = m
 
@@ -215,34 +235,6 @@ defmodule ExWal.Manager.Failover do
 
     %Options{primary: p} = opts
 
-    # Recycle only the primary at index=0, if there was no failover,
-    # and synchronously closed. It may not be safe to recycle a file that is
-    # still being written to. And recycling when there was a failover may
-    # fill up the recycler with smaller log files. The restriction regarding
-    # index=0 is because logRecycler.Peek only exposes the
-    # DiskFileNum, and we need to use that to construct the path -- we could
-    # remove this restriction by changing the logRecycler interface, but we
-    # don't bother.
-    can_recycle_f = fn
-      %Models.VirtualLog{segments: [seg]} ->
-        %Models.Segment{index: i, dir: dir} = seg
-        i == 0 and dir == p[:dir]
-
-      _ ->
-        false
-    end
-
-    log_to_deletable = fn
-      %Models.VirtualLog{log_num: log_num, segments: segs} ->
-        Enum.map(segs, fn %Models.Segment{index: i, dir: dir, fs: fs} ->
-          %Models.Deletable{
-            log_num: log_num,
-            fs: fs,
-            path: Path.join(dir, Models.VirtualLog.filename(log_num, i))
-          }
-        end)
-    end
-
     may_delete =
       fn
         log, true, d ->
@@ -251,18 +243,18 @@ defmodule ExWal.Manager.Failover do
           |> if do
             d
           else
-            [log_to_deletable.(log) | d]
+            [log_to_deletable(log) | d]
           end
 
         log, false, d ->
-          [log_to_deletable.(log) | d]
+          [log_to_deletable(log) | d]
       end
 
     to_delete =
       cl
       |> Enum.filter(fn %Models.VirtualLog{log_num: log_num} -> log_num < min_log_num end)
       |> Enum.reduce(to_delete, fn %Models.VirtualLog{} = log, acc ->
-        may_delete.(log, can_recycle_f.(log), acc)
+        may_delete.(log, can_recycle_f(log, p[:dir]), acc)
       end)
       |> List.flatten()
 
@@ -343,6 +335,32 @@ defmodule ExWal.Manager.Failover do
 
   defp may_log_reason(:normal), do: :pass
   defp may_log_reason(reason), do: Logger.error("failover manager terminated: #{inspect(reason)}")
+
+  # Recycle only the primary at index=0, if there was no failover,
+  # and synchronously closed. It may not be safe to recycle a file that is
+  # still being written to. And recycling when there was a failover may
+  # fill up the recycler with smaller log files. The restriction regarding
+  # index=0 is because logRecycler.Peek only exposes the
+  # DiskFileNum, and we need to use that to construct the path -- we could
+  # remove this restriction by changing the logRecycler interface, but we
+  # don't bother.
+  defp can_recycle_f(%Models.VirtualLog{segments: [seg]}, primary_dir) do
+    %Models.Segment{index: i, dir: dir} = seg
+    i == 0 and dir == primary_dir
+  end
+
+  defp can_recycle_f(_, _primary_dir), do: false
+
+  @spec log_to_deletable(Models.VirtualLog.t()) :: [Models.Deletable.t()]
+  def log_to_deletable(%Models.VirtualLog{log_num: log_num, segments: segs}) do
+    Enum.map(segs, fn %Models.Segment{index: i, dir: dir, fs: fs} ->
+      %Models.Deletable{
+        log_num: log_num,
+        fs: fs,
+        path: Path.join(dir, Models.VirtualLog.filename(log_num, i))
+      }
+    end)
+  end
 end
 
 defimpl ExWal.Manager, for: ExWal.Manager.Failover do
