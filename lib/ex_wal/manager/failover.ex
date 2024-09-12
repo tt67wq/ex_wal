@@ -37,6 +37,13 @@ defmodule ExWal.Manager.Failover do
             closed_logs: [],
             opts: nil
 
+  @spec start_link({
+          name :: GenServer.name(),
+          recycler :: ExWal.Recycler.t(),
+          dynamic_sup :: GenServer.name(),
+          registry :: GenServer.name(),
+          opts :: Options.t()
+        }) :: GenServer.on_start()
   def start_link({name, recycler, dynamic_sup, registry, opts}) do
     GenServer.start_link(
       __MODULE__,

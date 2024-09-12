@@ -150,6 +150,7 @@ defmodule ExWal.Monitor do
     %{w: %Failover{name: n}, type: type, num_switch: ns} = writer
     writer = %{writer | type: switch_type(type), num_switch: ns + 1}
     %DirAndFile{dir: dir} = dirs[type]
+    Logger.warning("FailoverWriter switch to #{dir}")
     :ok = Failover.switch_dir(n, dir)
     %__MODULE__{state | writer: writer}
   end

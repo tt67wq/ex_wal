@@ -72,6 +72,14 @@ defmodule ExWal.LogWriter.Failover do
             observer: nil,
             manager: nil
 
+  @spec start_link({
+          name :: GenServer.name(),
+          registry :: GenServer.name(),
+          fs :: ExWal.FS.t(),
+          dir :: String.t(),
+          log_num :: non_neg_integer(),
+          manager :: GenServer.name() | nil
+        }) :: GenServer.on_start()
   def start_link({name, registry, fs, dir, log_num, manager}) do
     GenServer.start_link(
       __MODULE__,
