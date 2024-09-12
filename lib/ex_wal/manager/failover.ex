@@ -4,6 +4,7 @@ defmodule ExWal.Manager.Failover do
   use GenServer, restart: :transient
 
   alias ExWal.FS
+  alias ExWal.LogWriter
   alias ExWal.Manager.Options
   alias ExWal.Models
   alias ExWal.Monitor
@@ -71,6 +72,11 @@ defmodule ExWal.Manager.Failover do
           {:ok, [Models.Deletable.t()]} | {:error, reason :: any()}
   def obsolete(name, min_log_num, recycle?) do
     GenServer.call(name, {:obsolete, min_log_num, recycle?})
+  end
+
+  @spec list(name :: GenServer.name()) :: {:ok, [Models.VirtualLog.t()]} | {:error, reason :: any()}
+  def list(name) do
+    GenServer.call(name, :list)
   end
 
   # ---------------- server ---------------
@@ -265,6 +271,17 @@ defmodule ExWal.Manager.Failover do
     {:reply, {:ok, to_delete}, %__MODULE__{state | initial_obsolete: [], closed_logs: cl}}
   end
 
+  def handle_call(:list, _from, %__MODULE__{current_writer: nil} = state) do
+    %__MODULE__{closed_logs: cl} = state
+    {:reply, {:ok, cl}, state}
+  end
+
+  def handle_call(:list, _from, state) do
+    %__MODULE__{closed_logs: cl, current_writer: {_, w}} = state
+    {:ok, log} = LogWriter.Failover.get_log(w.name)
+    {:reply, {:ok, [log | cl]}, state}
+  end
+
   @impl GenServer
   def handle_info({:writer_shutdown, %Models.VirtualLog{log_num: a}} = n, %__MODULE__{current_writer: {b, _}} = state)
       when a == b do
@@ -326,4 +343,24 @@ defmodule ExWal.Manager.Failover do
 
   defp may_log_reason(:normal), do: :pass
   defp may_log_reason(reason), do: Logger.error("failover manager terminated: #{inspect(reason)}")
+end
+
+defimpl ExWal.Manager, for: ExWal.Manager.Failover do
+  alias ExWal.Manager.Failover
+
+  def create(%Failover{name: name}, log_num) do
+    Failover.create(name, log_num)
+  end
+
+  def obsolete(%Failover{name: name}, min_log_num, recycle?) do
+    Failover.obsolete(name, min_log_num, recycle?)
+  end
+
+  def list(%Failover{name: name}) do
+    Failover.list(name)
+  end
+
+  def close(%Failover{name: name}) do
+    Failover.stop(name)
+  end
 end

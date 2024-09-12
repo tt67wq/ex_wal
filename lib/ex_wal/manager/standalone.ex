@@ -70,7 +70,7 @@ defmodule ExWal.Manager.Standalone do
     GenServer.call(name, {:obsolete, min_log_num, recycle?})
   end
 
-  @spec list(name :: GenServer.name()) :: {:ok, [ExWal.Models.VirtualLog.t()]} | {:error, reason :: any()}
+  @spec list(name :: GenServer.name()) :: {:ok, [Models.VirtualLog.t()]} | {:error, reason :: any()}
   def list(name) do
     GenServer.call(name, :list)
   end
