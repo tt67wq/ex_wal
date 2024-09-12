@@ -1,6 +1,6 @@
 defmodule ExWal.LogWriter.Failover.LogicalOffset do
   @moduledoc false
-  defstruct offset: 0, latest_log_size: 0, estimated_offset?: false
+  defstruct offset: 0, latest_log_size: 0, no_estimated_offset?: false
 end
 
 defmodule ExWal.LogWriter.Failover.WriterAndRecorder do
@@ -48,7 +48,7 @@ defmodule ExWal.LogWriter.Failover do
           logical_offset: %LogicalOffset{
             offset: non_neg_integer(),
             latest_log_size: non_neg_integer(),
-            estimated_offset?: boolean()
+            no_estimated_offset?: boolean()
           },
           observer: pid() | GenServer.name(),
           manager: pid() | GenServer.name()
@@ -67,7 +67,7 @@ defmodule ExWal.LogWriter.Failover do
             logical_offset: %LogicalOffset{
               offset: 0,
               latest_log_size: 0,
-              estimated_offset?: false
+              no_estimated_offset?: false
             },
             observer: nil,
             manager: nil
@@ -130,7 +130,12 @@ defmodule ExWal.LogWriter.Failover do
   def terminate(reason, %__MODULE__{manager: m} = state) do
     may_log_reason(reason)
     close_writers(state)
-    send(m, {:writer_shutdown, get_virtual_log(state)})
+
+    m
+    |> is_nil()
+    |> unless do
+      send(m, {:writer_shutdown, get_virtual_log(state)})
+    end
   end
 
   @impl GenServer
@@ -180,7 +185,7 @@ defmodule ExWal.LogWriter.Failover do
   def handle_call(
         {:sync_writes, _} = input,
         _,
-        %__MODULE__{logical_offset: %LogicalOffset{estimated_offset?: true}} = state
+        %__MODULE__{logical_offset: %LogicalOffset{no_estimated_offset?: false}} = state
       ) do
     %__MODULE__{writers: writers, logical_offset: logical_offset} = state
     writer = get_latest_writer(writers)
@@ -198,7 +203,15 @@ defmodule ExWal.LogWriter.Failover do
         {
           :reply,
           {:ok, of},
-          %__MODULE__{state | logical_offset: %LogicalOffset{logical_offset | offset: of}}
+          %__MODULE__{
+            state
+            | logical_offset: %LogicalOffset{
+                logical_offset
+                | offset: of,
+                  latest_log_size: of,
+                  no_estimated_offset?: true
+              }
+          }
         }
 
       {:error, reason} ->
@@ -224,18 +237,16 @@ defmodule ExWal.LogWriter.Failover do
         Obeserver.record_end(ob, nil)
         delta = of - ls
 
+        lo = %LogicalOffset{
+          logical_offset
+          | latest_log_size: of,
+            offset: offset + delta
+        }
+
         {
           :reply,
-          {:ok, logical_offset.offset},
-          %__MODULE__{
-            state
-            | logical_offset: %LogicalOffset{
-                logical_offset
-                | latest_log_size: of,
-                  offset: offset + delta,
-                  estimated_offset?: true
-              }
-          }
+          {:ok, lo.offset},
+          %__MODULE__{state | logical_offset: lo}
         }
 
       {:error, reason} ->

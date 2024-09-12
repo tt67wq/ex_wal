@@ -1,4 +1,4 @@
-defmodule Writer.SingleTest do
+defmodule Writer.FailoverTest do
   @moduledoc false
   use ExUnit.Case
 
@@ -6,7 +6,7 @@ defmodule Writer.SingleTest do
   alias ExWal.FS.Default
   alias ExWal.FS.Syncing
   alias ExWal.LogWriter
-  alias ExWal.Models
+  # alias ExWal.Models
 
   @path "./tmp/log_writer_test"
 
@@ -27,15 +27,14 @@ defmodule Writer.SingleTest do
 
   test "write record", %{fs: fs} do
     FS.mkdir_all(fs, @path)
-    filename = Models.VirtualLog.filename(0, 0)
-    {:ok, file} = FS.create(fs, Path.join(@path, filename))
-    start_supervised!({LogWriter.Single, {:test_writter, file, 0}})
+    # {name, registry, fs, dir, log_num, manager}
+    start_supervised!({LogWriter.Failover, {:test_writter, :test_registry, fs, @path, 0, nil}})
 
-    writter = LogWriter.Single.get(:test_writter)
+    writter = LogWriter.Failover.get(:test_writter)
 
-    assert {:ok, 16} = LogWriter.write_record(writter, "aaaaa")
+    assert {:ok, 5} = LogWriter.write_record(writter, "aaaaa")
+    Process.sleep(100)
     assert {:ok, 32} = LogWriter.write_record(writter, "bbbbb")
     assert {:ok, 48} = LogWriter.write_record(writter, "ccccc")
-    Process.sleep(100)
   end
 end
