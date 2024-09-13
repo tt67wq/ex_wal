@@ -28,7 +28,7 @@ defmodule ExWal.LogWriter.Failover do
   alias ExWal.LogWriter.Failover.WriterAndRecorder
   alias ExWal.LogWriter.Single
   alias ExWal.Models
-  alias ExWal.Obeserver
+  alias ExWal.Observer
 
   require Logger
 
@@ -50,7 +50,6 @@ defmodule ExWal.LogWriter.Failover do
             latest_log_size: non_neg_integer(),
             no_estimated_offset?: boolean()
           },
-          observer: pid() | GenServer.name(),
           manager: pid() | GenServer.name()
         }
 
@@ -69,7 +68,6 @@ defmodule ExWal.LogWriter.Failover do
               latest_log_size: 0,
               no_estimated_offset?: false
             },
-            observer: nil,
             manager: nil
 
   @spec start_link({
@@ -78,7 +76,7 @@ defmodule ExWal.LogWriter.Failover do
           fs :: ExWal.FS.t(),
           dir :: String.t(),
           log_num :: non_neg_integer(),
-          manager :: GenServer.name() | nil
+          manager :: pid() | nil
         }) :: GenServer.on_start()
   def start_link({name, registry, fs, dir, log_num, manager}) do
     GenServer.start_link(
@@ -118,8 +116,6 @@ defmodule ExWal.LogWriter.Failover do
 
   @impl GenServer
   def init({name, registry, fs, dir, log_num, manager}) do
-    {:ok, observer} = Obeserver.start_link({:via, Registry, {registry, {:observer, log_num}}})
-
     {
       :ok,
       %__MODULE__{
@@ -127,7 +123,6 @@ defmodule ExWal.LogWriter.Failover do
         registry: registry,
         fs: fs,
         log_num: log_num,
-        observer: observer,
         manager: manager
       },
       {:continue, {:switch_dir, dir}}
@@ -200,13 +195,13 @@ defmodule ExWal.LogWriter.Failover do
     %WriterAndRecorder{w: w, observer: ob} = writer
     {:sync_writes, p} = input
 
-    Obeserver.record_start(ob)
+    Observer.record_start(ob)
 
     w
     |> LogWriter.write_record(p)
     |> case do
       {:ok, of} ->
-        Obeserver.record_end(ob, nil)
+        Observer.record_end(ob, nil)
 
         {
           :reply,
@@ -223,7 +218,7 @@ defmodule ExWal.LogWriter.Failover do
         }
 
       {:error, reason} ->
-        Obeserver.record_end(ob, reason)
+        Observer.record_end(ob, reason)
 
         {:reply, {:error, reason}, state}
     end
@@ -236,13 +231,13 @@ defmodule ExWal.LogWriter.Failover do
     %WriterAndRecorder{w: w, observer: ob} = writer
     %LogicalOffset{latest_log_size: ls, offset: offset} = logical_offset
 
-    Obeserver.record_start(ob)
+    Observer.record_start(ob)
 
     w
     |> LogWriter.write_record(p)
     |> case do
       {:ok, of} ->
-        Obeserver.record_end(ob, nil)
+        Observer.record_end(ob, nil)
         delta = of - ls
 
         lo = %LogicalOffset{
@@ -258,7 +253,7 @@ defmodule ExWal.LogWriter.Failover do
         }
 
       {:error, reason} ->
-        Obeserver.record_end(ob, reason)
+        Observer.record_end(ob, reason)
         {:reply, {:error, reason}, state}
     end
   end
@@ -304,8 +299,7 @@ defmodule ExWal.LogWriter.Failover do
       fs: fs,
       log_num: log_num,
       registry: registry,
-      writers: %{cnt: idx},
-      observer: observer
+      writers: %{cnt: idx}
     } = state
 
     log_name = Path.join(new_dir, Models.VirtualLog.filename(log_num, idx))
@@ -319,6 +313,7 @@ defmodule ExWal.LogWriter.Failover do
         |> case do
           {:ok, file} ->
             {:ok, _} = Single.start_link({writer_name, file, log_num})
+            {:ok, observer} = Observer.start_link({:via, Registry, {registry, {:observer, log_num, idx}}})
 
             wr = %WriterAndRecorder{
               w: Single.get(writer_name),
@@ -342,10 +337,13 @@ defmodule ExWal.LogWriter.Failover do
   defp close_writers(state) do
     %__MODULE__{writers: %{s: s}} = state
 
-    Enum.each(s, fn %WriterAndRecorder{w: w, observer: ob} ->
-      LogWriter.stop(w)
-      Obeserver.stop(ob)
-    end)
+    Enum.each(
+      s,
+      fn {_, %WriterAndRecorder{w: w, observer: ob}} ->
+        LogWriter.stop(w)
+        Observer.stop(ob)
+      end
+    )
   end
 
   defp may_log_reason(:normal), do: :pass
@@ -370,16 +368,16 @@ defmodule ExWal.LogWriter.Failover do
     |> Enum.reverse()
     |> IO.iodata_to_binary()
     |> then(fn x ->
-      Obeserver.record_start(ob)
+      Observer.record_start(ob)
 
       w
       |> LogWriter.write_record(x)
       |> case do
         {:ok, _} ->
-          Obeserver.record_end(ob, nil)
+          Observer.record_end(ob, nil)
 
         {:error, reason} ->
-          Obeserver.record_end(ob, reason)
+          Observer.record_end(ob, reason)
       end
     end)
   end

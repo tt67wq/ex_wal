@@ -9,7 +9,6 @@ defmodule ExWal.Manager.Failover do
   alias ExWal.Models
   alias ExWal.Monitor
   alias ExWal.Monitor.DirAndFile
-  alias ExWal.Obeserver
   alias ExWal.Recycler
 
   require Logger
@@ -20,7 +19,6 @@ defmodule ExWal.Manager.Failover do
           dynamic_sup: GenServer.name(),
           registry: GenServer.name(),
           monitor: pid() | GenServer.name(),
-          observer: pid() | GenServer.name(),
           initial_obsolete: [Models.Deletable.t()],
           current_writer: {Models.VirtualLog.log_num(), ExWal.LogWriter.t()} | nil,
           closed_logs: [Models.VirtualLog.t()],
@@ -32,7 +30,6 @@ defmodule ExWal.Manager.Failover do
             dynamic_sup: nil,
             registry: nil,
             monitor: nil,
-            observer: nil,
             initial_obsolete: [],
             current_writer: nil,
             closed_logs: [],
@@ -100,9 +97,8 @@ defmodule ExWal.Manager.Failover do
 
   @impl GenServer
   def terminate(reason, state) do
-    %__MODULE__{monitor: m, observer: ob} = state
+    %__MODULE__{monitor: m} = state
     Monitor.stop(m)
-    Obeserver.stop(ob)
 
     may_log_reason(reason)
   end
@@ -191,8 +187,7 @@ defmodule ExWal.Manager.Failover do
     %__MODULE__{
       monitor: monitor,
       registry: registry,
-      dynamic_sup: ds,
-      observer: ob
+      dynamic_sup: ds
     } = state
 
     s = self()
@@ -211,7 +206,6 @@ defmodule ExWal.Manager.Failover do
               fs,
               dir,
               log_num,
-              ob,
               s
             }
           }

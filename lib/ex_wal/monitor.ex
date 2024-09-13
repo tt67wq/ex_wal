@@ -16,7 +16,7 @@ defmodule ExWal.Monitor do
 
   alias ExWal.LogWriter.Failover
   alias ExWal.Monitor.DirAndFile
-  alias ExWal.Obeserver
+  alias ExWal.Observer
 
   require Logger
 
@@ -81,7 +81,7 @@ defmodule ExWal.Monitor do
     {latency, error} =
       w.name
       |> Failover.current_observer()
-      |> Obeserver.stats()
+      |> Observer.stats()
 
     {switch?, state} = switchable?(latency, error, dirs)
 

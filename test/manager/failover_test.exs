@@ -58,14 +58,14 @@ defmodule Manager.FailoverTest do
     {:ok, m} = ExWal.Core.manager(:test_core, :failover, "failover_manager", opts)
     assert {:ok, writer} = Manager.create(m, 1)
 
-    1..50
+    1..1000
     |> Enum.map(fn x ->
       s =
         x
         |> Integer.to_string()
         |> String.pad_leading(4, "0")
 
-      "Hello Elixir! I am a developer. I love Elixir #{s}."
+      "Hello Elixir! I am a developer. I love Elixir #{s}.\n"
     end)
     |> Enum.each(fn data -> LogWriter.write_record(writer, data) end)
 

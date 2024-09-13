@@ -1,4 +1,4 @@
-defmodule ExWal.Obeserver do
+defmodule ExWal.Observer do
   @moduledoc false
 
   use Agent
