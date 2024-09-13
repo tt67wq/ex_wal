@@ -92,6 +92,9 @@ defmodule ExWal.Core do
     {:ok, Manager.Failover.get(manager_name)}
   end
 
+  def handle_manager(_state, mode, _manager_name, _opts),
+    do: raise(ExWal.Exception, message: "unsupported mode", details: mode)
+
   def handle_manager(_state, _dirname, _mode), do: {:error, :unsupported_mode}
 
   def handle_open_for_read(state, vlog)

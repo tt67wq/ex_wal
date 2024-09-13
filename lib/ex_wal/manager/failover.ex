@@ -93,17 +93,9 @@ defmodule ExWal.Manager.Failover do
       opts: opts
     }
 
-    %Options{secondary: sc} = opts
+    init_path(opts)
 
-    sc
-    |> test_secondary_dir()
-    |> case do
-      :ok ->
-        {:ok, state, {:continue, :monitor}}
-
-      {:error, reason} ->
-        {:stop, reason}
-    end
+    {:ok, state, {:continue, :monitor}}
   end
 
   @impl GenServer
@@ -116,6 +108,20 @@ defmodule ExWal.Manager.Failover do
   end
 
   @impl GenServer
+  def handle_continue(:test, state) do
+    %__MODULE__{opts: %Options{secondary: sc}} = state
+
+    sc
+    |> test_secondary_dir()
+    |> case do
+      :ok ->
+        {:ok, state, {:continue, :monitor}}
+
+      {:error, reason} ->
+        {:stop, reason}
+    end
+  end
+
   def handle_continue(:monitor, state) do
     %__MODULE__{opts: opts} = state
 
@@ -309,7 +315,7 @@ defmodule ExWal.Manager.Failover do
     |> ExWal.FS.create(Path.join(dir, "failover_source"))
     |> case do
       {:ok, file} ->
-        test_file(file)
+        :ok = test_file(file)
 
       err ->
         err
@@ -317,7 +323,9 @@ defmodule ExWal.Manager.Failover do
   end
 
   defp test_file(file) do
-    ExWal.File.write(file, "secondary: #{Path.dirname(file)}\nprocess start: #{System.system_time()}\n")
+    with :ok <- ExWal.File.write(file, "secondary: #{Path.dirname(file)}\nprocess start: #{System.system_time()}\n") do
+      ExWal.File.close(file)
+    end
   end
 
   defp init_recycler_and_obsolete(fs, dir, recycler) do
@@ -380,6 +388,14 @@ defmodule ExWal.Manager.Failover do
         path: Path.join(dir, Models.VirtualLog.filename(log_num, i))
       }
     end)
+  end
+
+  def init_path(opts) do
+    # init path
+    %Options{primary: [fs: fs, dir: dir]} = opts
+    :ok = FS.mkdir_all(fs, dir)
+    %Options{secondary: [fs: fs, dir: dir]} = opts
+    :ok = FS.mkdir_all(fs, dir)
   end
 end
 

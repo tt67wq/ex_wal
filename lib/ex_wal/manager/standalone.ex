@@ -117,6 +117,8 @@ defmodule ExWal.Manager.Standalone do
   def handle_continue({:initialize, opts}, state) do
     %__MODULE__{dirname: dirname, fs: fs, recycler: recycler} = state
 
+    FS.mkdir_all(fs, dirname)
+
     with do
       %Options{max_num_recyclable_logs: ml} = opts
       :ok = Recycler.initialize(recycler, ml)
