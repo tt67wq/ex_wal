@@ -1,5 +1,7 @@
 defmodule ExWal.LogReader.Virtual do
-  @moduledoc false
+  @moduledoc """
+  A virtual log consists of a set of segments. Each segment is a physical WAL file.
+  """
 
   alias ExWal.Models.Segment
   alias ExWal.Models.VirtualLog
@@ -56,6 +58,7 @@ defmodule ExWal.LogReader.Virtual do
         {{:ok, p}, state}
 
       :eof ->
+        # current reader eof, move to next reader
         may_handle_next(state)
 
       err ->

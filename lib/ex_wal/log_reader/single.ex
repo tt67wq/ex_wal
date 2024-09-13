@@ -106,6 +106,7 @@ defmodule ExWal.LogReader.Single do
         |> ExWal.File.read(@block_size)
         |> case do
           {:ok, buf} ->
+            # concat rest buff to next block
             iter_read(%__MODULE__{state | buf: rest <> buf}, acc)
 
           :eof ->
@@ -119,8 +120,6 @@ defmodule ExWal.LogReader.Single do
         {err, state}
     end
   end
-
-  # defp make_resp([]), do: <<>>
 
   defp make_resp(chunks) do
     chunks
