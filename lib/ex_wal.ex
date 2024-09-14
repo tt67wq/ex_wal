@@ -75,6 +75,12 @@ defmodule ExWal do
       """
       @spec open_for_read(vlog :: ExWal.Models.VirtualLog.t()) :: {:ok, ExWal.LogReader.t()} | {:error, reason :: term()}
       def open_for_read(vlog), do: delegate(:open_for_read, [vlog])
+
+      @doc """
+      Get the syncing file system.
+      """
+      @spec syncing_fs :: ExWal.FS.t()
+      def syncing_fs, do: ExWal.Supervisor.syncing_fs(__MODULE__)
     end
   end
 end

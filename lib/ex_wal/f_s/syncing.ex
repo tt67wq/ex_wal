@@ -1,6 +1,6 @@
 defmodule ExWal.FS.Syncing do
   @moduledoc """
-  Syncing file system.
+  Syncing file system. This implementation create *syncing* file which provider better write performance.
   """
 
   use Agent

@@ -1,5 +1,8 @@
 defmodule ExWal.File.Syncing do
-  @moduledoc false
+  @moduledoc """
+  Syncing file implementation. This implementation do syncing work automatically after writting.
+  See `may_sync` function for specific synchronization conditions
+  """
 
   use Agent, restart: :transient
 

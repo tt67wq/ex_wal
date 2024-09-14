@@ -29,16 +29,13 @@ defmodule MyApp do
 end
 ```
 
-2. Config this instance
-```Elixir
-config :my_app, MyApp,
-  path: "/tmp/wal_test",
-  nosync: false,
-  # 4k per segment
-  segment_size: 4 * 1024,
-  # cache max 5 segments
-  segment_cache_size: 5
-```
+2. Choose your file system implementation
+ExWal provides 2 file system implementations:
+- `ExWal.FS.Default`
+- `ExWal.FS.Syncing`
+
+`ExWal.FS.Syncing` provider better write performance.
+
 
 3. Add it to supervised tree
 ```elixir
