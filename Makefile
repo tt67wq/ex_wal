@@ -32,6 +32,7 @@ deps.upgrade:
 deps.purge:
 	@rm -rf deps
 	@rm -rf _build
+	@rm -rf .elixir_ls
 	@echo "Dependencies purged."
 
 compile:

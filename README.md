@@ -4,10 +4,6 @@
 
 **ExWal is a project that aims to provide a solution for managing write-ahead log (WAL) in Elixir.**
 
-ExWal is a GenServer-based module that provides functionality for working with a Write-Ahead Log (WAL). 
-
-The module includes utilities for managing WAL files, segments, blocks, and entries. It also supports options for customizing the WAL path, synchronization behavior, segment size, segment cache size, and the underlying store module.
-
 ## Installation
 
 The package can be installed by adding `ex_wal` to your list of dependencies in `mix.exs`:
@@ -21,14 +17,8 @@ end
 ```
 
 ## Design
-This project has heavily borrowed the code experience from the project at [tidwall/wal](https://github.com/tidwall/wal). In terms of design, WAL packages log entries into individual segments for maintenance. I take the last segment being written as the "hot" part, and while writing hot data, corresponding files will be appended. When the volume of "hot" data exceeds the configured value, we will transfer the hot data to the "cold" part and reopen a new "hot" segment.
+The design of this project borrows from the implementation of WAL in the [Pebble](https://github.com/cockroachdb/pebble) project.
 
-In the process of reading, in order to avoid frequent opening of cold data, I added an LRU cache to accelerate the reading speed of local data.
-
-In the operations of maintaining Segment and corresponding log entry, there are a considerable number of operations that find field based on index. However, the performance of [List](https://hexdocs.pm/elixir/List.html) provided by Elixir is not ideal in this situation, so we choose to use the [array](https://www.erlang.org/doc/man/array) module of erlang to store segment and block.
-
-### Store
-This project has designed the storage part as a behavior (`ExWal.Store`), defining a series of storage operations. The default implementation is file storage `ExWal.Store.File`. This implementation is pluggable, allowing users to implement this behavior themselves and replace it. It is even possible to consider implementing it using object storage from public cloud services like S3.
 
 ## Usage
 

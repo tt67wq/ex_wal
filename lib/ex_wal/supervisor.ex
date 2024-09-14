@@ -13,14 +13,13 @@ defmodule ExWal.Supervisor do
     children =
       [
         {DynamicSupervisor, name: dynamic_sup_name(name), strategy: :one_for_one},
-        {Registry, name: registry_name(name, :fs), keys: :unique},
-        {Registry, name: registry_name(name, :core), keys: :unique},
+        {Registry, name: registry_name(name), keys: :unique},
         {
           ExWal.Core,
           {
             name,
             dynamic_sup_name(name),
-            registry_name(name, :core)
+            registry_name(name)
           }
         }
       ]
@@ -32,8 +31,8 @@ defmodule ExWal.Supervisor do
     Module.concat(name, Supervisor)
   end
 
-  defp registry_name(name, domain) do
-    Module.concat([name, Registry, domain])
+  defp registry_name(name) do
+    Module.concat(name, Registry)
   end
 
   defp dynamic_sup_name(name) do

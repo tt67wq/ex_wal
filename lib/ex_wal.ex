@@ -43,14 +43,38 @@ defmodule ExWal do
       @doc """
       Get a manager of the WAL.
 
-       Examples
-       -------
-       ```
-       iex> ExWalApp.manager("/data/wal", :standalone)
-       ```
+      ## Parameters
+
+      - `mode`: `:standalone` or `:failover`
+      - `manager_name`: the name of the manager
+      - `opts`: the options of the manager, see `ExWal.Manager.Options.t()`
+
+       Returns
+
+      - `{:ok, ExWal.Manager.t()}`: the manager
+      - `{:error, reason}`: the reason of the error
       """
-      @spec manager(dirname :: binary(), mode :: :standalone) :: ok_t(ExWal.Manager.t()) | err_t()
-      def manager(dirname, mode \\ :standalone), do: delegate(:manager, [dirname, mode])
+      @spec manager(
+              mode :: :standalone | :failover,
+              manager_name :: term(),
+              opts :: ExWal.Manager.Options.t()
+            ) :: {:ok, ExWal.Manager.t()} | {:error, reason :: term()}
+      def manager(mode, manager_name, opts), do: delegate(:manager, [mode, manager_name, opts])
+
+      @doc """
+      Open a reader for reading the virtual log.
+
+       Parameters
+
+      - `vlog`: the virtual log
+
+       Returns
+
+      - `{:ok, ExWal.LogReader.t()}`: the reader
+      - `{:error, reason}`: the reason of the error
+      """
+      @spec open_for_read(vlog :: ExWal.Models.VirtualLog.t()) :: {:ok, ExWal.LogReader.t()} | {:error, reason :: term()}
+      def open_for_read(vlog), do: delegate(:open_for_read, [vlog])
     end
   end
 end

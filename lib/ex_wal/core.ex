@@ -33,6 +33,10 @@ defmodule ExWal.Core do
     Agent.get(name, __MODULE__, :handle_manager, [mode, manager_name, opts])
   end
 
+  @spec open_for_read(
+          name :: Agent.name(),
+          vlog :: ExWal.Models.VirtualLog.t()
+        ) :: {:ok, ExWal.LogReader.t()} | {:error, reason :: term()}
   def open_for_read(name, vlog) do
     Agent.get(name, __MODULE__, :handle_open_for_read, [vlog])
   end
