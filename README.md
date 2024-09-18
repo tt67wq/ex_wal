@@ -11,7 +11,7 @@ The package can be installed by adding `ex_wal` to your list of dependencies in 
 ```elixir
 def deps do
   [
-    {:ex_wal, "~> 0.2"}
+    {:ex_wal, "~> 0.3"}
   ]
 end
 ```
