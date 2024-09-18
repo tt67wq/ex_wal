@@ -34,7 +34,7 @@ ExWal provides 2 file system implementations:
 - `ExWal.FS.Default`
 - `ExWal.FS.Syncing`
 
-`ExWal.FS.Syncing` provider better write performance.
+`ExWal.FS.Syncing` provider better write performance. You can use `MyApp.syncing_fs/0` to get a `ExWal.FS.Syncing` instance.
 
 
 3. Add it to supervised tree
@@ -47,40 +47,98 @@ Supervisor.start_link(
 )
 ```
 
-4. Enjoy your journey
+4. Get a manager
+
+ExWal provides 2 manager implementations:
+- `ExWal.Manager.Standalone`
+- `ExWal.Manager.Failover`
+
+You can use `MyApp.manager/3` to get a `ExWal.Manager` instance.
 
 ```Elixir
-latest = MyApp.last_index()
-Logger.info("latest: #{latest}")
+# get a standalone manager
+{:ok, m} =
+      MyApp.manager(:standalone, "my-manager", %ExWal.Manager.Options{
+        primary: [
+          fs: MyApp.syncing_fs(),
+          dir: "my-primary-dir-path"
+        ]
+      })
 
-# write 10k entries
-entries =
-  Enum.map((latest + 1)..(latest + 10_000), fn i -> Entry.new(i, "Hello Elixir #{i}") end)
+# get a failover manager
+{:ok, m} =
+      MyApp.manager(:failover, "my-manager", %ExWal.Manager.Options{
+        primary: [
+          fs: MyApp.syncing_fs(),
+          dir: "my-primary-dir-path"
+        ],
+        secondary: [
+          fs: MyApp.syncing_fs(),
+          dir: "my-secondary-dir-path"
+        ]
+      })
+```
 
-:ok = MyApp.write(entries)
+5. Create a WAL writer
 
-latest = MyApp.last_index()
-Logger.info("latest: #{latest}") # should be latest + 10_000
+Manager provides a `create/2` function to create a WAL writer. Writer is a instance which implements `ExWal.LogWriter` protocol.
 
-# read
-{:ok, ret} = MyApp.read(latest - 10)
-Logger.info("idx: #{latest - 10}, content: #{ret}")
+```Elixir
+{:ok, m} =
+      MyApp.manager(:standalone, "my-manager", %ExWal.Manager.Options{
+        primary: [
+          fs: MyApp.syncing_fs(),
+          dir: "my-primary-dir-path"
+        ]
+      })
 
-# truncate before
-:ok = MyApp.truncate_before(latest - 100)
-first = MyApp.first_index()
-Logger.info("first: #{first}") # should be latest - 100
+{:ok, writer} = ExWal.Manager.create(m, 1)
 
-# truncate after
-:ok = MyApp.truncate_after(latest - 5)
-latest = MyApp.last_index()
-Logger.info("latest: #{latest}") # should be latest - 5
+1..50
+|> Enum.map(fn x ->
+  s =
+    x
+    |> Integer.to_string()
+    |> String.pad_leading(4, "0")
 
-# reinit wal
-:ok = MyApp.reinit()
+  "Hello Elixir! I am a developer. I love Elixir #{s}."
+end)
+|> Enum.each(fn data -> LogWriter.write_record(writer, data) end)
+```
 
-# clear all wal data
-:ok = MyApp.clear()
+6. Create a WAL reader
+
+Manager provides a `list/2` function to list all WAL files. You can use `MyApp.open_for_read/1` function to create a Reader.  Reader is a instance which implements `ExWal.LogReader` protocol.
+
+```Elixir
+{:ok, m} =
+      MyApp.manager(:standalone, "my-manager", %ExWal.Manager.Options{
+        primary: [
+          fs: MyApp.syncing_fs(),
+          dir: "my-primary-dir-path"
+        ]
+      })
+
+{:ok, [log | _]} = ExWal.Manager.list(m)
+{:ok, reader} = MyApp.open_for_read(log)
+
+reader
+|> Enum.reduce_while(fn reader ->
+  case LogReader.next(reader) do
+    :eof ->
+      {:halt, :ok}
+
+    {:error, _reason} ->
+      LogReader.recovery(reader)
+      {:cont, reader}
+
+    # raise ExWal.Exception, message: "read failed: #{inspect(reason)}"
+
+    bin ->
+      IO.puts(bin)
+      {:cont, reader}
+  end
+end)
 ```
 
 

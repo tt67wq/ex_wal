@@ -3,7 +3,6 @@ defmodule AppTest do
   use ExUnit.Case
 
   alias ExWal.FS.Default
-  alias ExWal.FS.Syncing
   alias ExWal.LogReader
   alias ExWal.LogWriter
   alias ExWal.Manager
@@ -21,12 +20,10 @@ defmodule AppTest do
   end
 
   setup_all do
-    default = %Default{}
     start_supervised!({Registry, keys: :unique, name: :test_registry})
     start_supervised!({DynamicSupervisor, name: :test_dynamic_sup})
-    start_supervised!({Syncing, {:test_fs, default, :test_dynamic_sup, :test_registry}})
     start_supervised!({App, []})
-    [fs: Syncing.init(:test_fs, default, :test_dynamic_sup, :test_registry)]
+    [fs: App.syncing_fs()]
   end
 
   test "main", %{fs: fs} do

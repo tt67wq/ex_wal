@@ -23,7 +23,14 @@ end
 
 Application.put_env(:bench, BenchmarkApp, [])
 {:ok, _} = BenchmarkApp.start_link()
-{:ok, manager} = BenchmarkApp.manager(data_dir, :standalone)
+
+{:ok, manager} =
+  BenchmarkApp.manager(:standalone, "benchmark", %ExWal.Manager.Options{
+    primary: [
+      fs: BenchmarkApp.syncing_fs(),
+      dir: data_dir
+    ]
+  })
 
 Benchee.run(
   %{
